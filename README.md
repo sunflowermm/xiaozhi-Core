@@ -132,3 +132,10 @@ sequenceDiagram
 
 - 协议：[78/xiaozhi-esp32 WebSocket](https://github.com/78/xiaozhi-esp32/blob/main/docs/websocket.md)
 - 框架：[tasker-base-spec](../../../docs/tasker-base-spec.md)、[aistream](../../../docs/aistream.md)、[plugin-base](../../../docs/plugin-base.md)
+
+---
+
+## 鸣谢
+
+xiaozhi-Core 基于 [XRK-AGT](https://github.com/sunflowermm/XRK-AGT) 提供的 Tasker、ASR/TTS 工厂与 AIStream 工作流能力实现，
+感谢 XRK-AGT 框架为本 Core 提供稳定的底层设施。
