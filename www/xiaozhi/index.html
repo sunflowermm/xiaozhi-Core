@@ -13,15 +13,23 @@
     .section h2 { font-size: 1rem; color: #666; margin: 0 0 12px; }
     .form-row { display: flex; align-items: center; margin-bottom: 12px; gap: 12px; }
     .form-row label { min-width: 140px; color: #555; }
-    .form-row input, .form-row select { flex: 1; padding: 8px 12px; border: 1px solid #ddd; border-radius: 6px; }
+    .form-row input, .form-row select, .form-row textarea { flex: 1; padding: 8px 12px; border: 1px solid #ddd; border-radius: 6px; }
+    .form-row textarea { min-height: 72px; resize: vertical; }
     .form-row input[type="checkbox"] { flex: none; width: auto; }
     .btn { padding: 10px 20px; border: none; border-radius: 6px; cursor: pointer; font-size: 14px; }
     .btn-primary { background: #0ea5e9; color: #fff; }
     .btn-primary:hover { background: #0284c7; }
     .status { padding: 12px; background: #f0fdf4; border-radius: 6px; margin-bottom: 16px; font-size: 14px; }
     .status.error { background: #fef2f2; }
+    .status.warn { background: #fffbeb; }
     .back { display: inline-block; margin-bottom: 16px; color: #0ea5e9; text-decoration: none; font-size: 14px; }
     .back:hover { text-decoration: underline; }
+    .api-meta { font-size: 12px; color: #888; margin-top: 8px; }
+    .api-meta a { color: #0ea5e9; }
+    .conn-list { margin-top: 8px; padding: 8px; background: #f8fafc; border-radius: 6px; font-size: 12px; max-height: 120px; overflow-y: auto; }
+    .conn-list li { padding: 2px 0; }
+    .conn-list empty { color: #94a3b8; }
+    #wsUrlDisplay { font-family: ui-monospace, monospace; font-size: 12px; word-break: break-all; }
   </style>
 </head>
 <body>
@@ -31,7 +39,13 @@
     <div id="status" class="status" style="display:none"></div>
     <div class="section" id="statusSection">
       <h2>运行状态</h2>
-      <p id="statusText">加载中...</p>
+      <p id="statusText">检测 API…</p>
+      <p id="wsUrlDisplay" class="api-meta" style="display:none"></p>
+      <div id="connListWrap" class="conn-list" style="display:none">
+        <strong>当前连接</strong>
+        <ul id="connList"></ul>
+      </div>
+      <p class="api-meta">接口：GET/POST <code>/api/xiaozhi/config</code> · GET <code>/api/xiaozhi/status</code> · 设备 OTA：GET <a href="/xiaozhi/ota/" target="_blank" rel="noopener">/xiaozhi/ota/</a> · POST /xiaozhi/ota/activate</p>
     </div>
 
     <div class="section">
@@ -44,6 +58,7 @@
         <label>WebSocket 路径</label>
         <input type="text" id="path" value="xiaozhi-esp32" placeholder="xiaozhi-esp32">
       </div>
+      <p id="wsUrlPreview" class="api-meta" style="display:none">设备将连接：<span id="wsUrlPreviewVal"></span></p>
     </div>
 
     <div class="section">
@@ -77,8 +92,30 @@
     <div class="section">
       <h2>AI 工作流</h2>
       <div class="form-row">
-        <label>工作流名称</label>
-        <input type="text" id="workflow" value="device" placeholder="device">
+        <label>工作流列表</label>
+        <input type="text" id="workflows" value="xiaozhi, desktop" placeholder="xiaozhi, desktop（多个用英文逗号分隔）">
+      </div>
+    </div>
+
+    <div class="section">
+      <h2>人设</h2>
+      <div class="form-row">
+        <label>persona</label>
+        <textarea id="persona" placeholder="设备 AI 人设描述">你是一个简洁友好的设备语音助手，以地道中文回答。</textarea>
+      </div>
+    </div>
+
+    <div class="section">
+      <h2>音量</h2>
+      <div class="form-row">
+        <label>默认音量</label>
+        <input type="number" id="volumeDefault" value="50" min="0" max="100">
+      </div>
+      <div class="form-row">
+        <label>最小 / 最大 / 步进</label>
+        <input type="number" id="volumeMin" value="0" min="0" max="100" style="width:4rem">
+        <input type="number" id="volumeMax" value="100" min="0" max="100" style="width:4rem">
+        <input type="number" id="volumeStep" value="5" min="1" max="10" style="width:4rem">
       </div>
     </div>
 
@@ -111,6 +148,8 @@
 
   <script>
     const apiBase = '';
+    const API = { config: apiBase + '/api/xiaozhi/config', status: apiBase + '/api/xiaozhi/status' };
+
     const showStatus = (msg, isError) => {
       const el = document.getElementById('status');
       el.textContent = msg;
@@ -119,11 +158,37 @@
       setTimeout(() => el.style.display = 'none', 4000);
     };
 
+    const apiFetch = async (url, opts = {}) => {
+      const res = await fetch(url, opts);
+      let json;
+      try { json = await res.json(); } catch { throw new Error(res.statusText || '响应非 JSON'); }
+      if (!res.ok) throw new Error(json?.message || json?.code || `HTTP ${res.status}`);
+      return json;
+    };
+
     const fetchConfig = async () => {
-      const res = await fetch(apiBase + '/api/xiaozhi/config');
-      const json = await res.json();
+      const json = await apiFetch(API.config);
       if (!json.success) throw new Error(json.message || '加载失败');
       return json.data?.data || {};
+    };
+
+    const fetchStatus = async () => {
+      const json = await apiFetch(API.status);
+      if (!json.success) return null;
+      return json.data || null;
+    };
+
+    const buildWsUrlPreview = (path) => {
+      const p = (path || 'xiaozhi-esp32').trim() || 'xiaozhi-esp32';
+      const prefix = p.startsWith('/') ? '' : '/';
+      const proto = location.protocol === 'https:' ? 'wss' : 'ws';
+      return `${proto}://${location.host}${prefix}${p}`;
+    };
+
+    const updateWsUrlPreview = (path) => {
+      const wrap = document.getElementById('wsUrlPreview');
+      const val = document.getElementById('wsUrlPreviewVal');
+      if (wrap && val) { val.textContent = buildWsUrlPreview(path); wrap.style.display = 'block'; }
     };
 
     const loadForm = (data) => {
@@ -133,54 +198,112 @@
       document.getElementById('asrEnabled').checked = data.asrEnabled !== false;
       document.getElementById('ttsProvider').value = data.ttsProvider || 'volcengine';
       document.getElementById('ttsEnabled').checked = data.ttsEnabled !== false;
-      document.getElementById('workflow').value = data.workflow || 'device';
+      const workflowsVal = Array.isArray(data.workflows) ? data.workflows.join(', ') : (data.workflow || 'xiaozhi');
+      document.getElementById('workflows').value = workflowsVal;
+      document.getElementById('persona').value = data.persona || '你是一个简洁友好的设备语音助手，以地道中文回答。';
+      const v = data.volume || {};
+      document.getElementById('volumeDefault').value = v.default ?? 50;
+      document.getElementById('volumeMin').value = v.min ?? 0;
+      document.getElementById('volumeMax').value = v.max ?? 100;
+      document.getElementById('volumeStep').value = v.step ?? 5;
       document.getElementById('httpRedirectFrom').value = data.httpRedirectFrom || '';
       document.getElementById('httpRedirectTo').value = data.httpRedirectTo || '';
       document.getElementById('timeoutHello').value = data.timeoutHello || 10000;
       document.getElementById('timeoutConnection').value = data.timeoutConnection || 300000;
+      updateWsUrlPreview(document.getElementById('path').value);
     };
 
-    const collectForm = () => ({
-      enabled: document.getElementById('enabled').checked,
-      path: document.getElementById('path').value.trim() || 'xiaozhi-esp32',
-      asrProvider: document.getElementById('asrProvider').value,
-      asrEnabled: document.getElementById('asrEnabled').checked,
-      ttsProvider: document.getElementById('ttsProvider').value,
-      ttsEnabled: document.getElementById('ttsEnabled').checked,
-      workflow: document.getElementById('workflow').value.trim() || 'device',
-      httpRedirectFrom: document.getElementById('httpRedirectFrom').value.trim(),
-      httpRedirectTo: document.getElementById('httpRedirectTo').value.trim(),
-      timeoutHello: parseInt(document.getElementById('timeoutHello').value, 10) || 10000,
-      timeoutConnection: parseInt(document.getElementById('timeoutConnection').value, 10) || 300000
-    });
+    const collectForm = () => {
+      const workflowsStr = document.getElementById('workflows').value.trim() || 'xiaozhi';
+      const workflows = workflowsStr.split(/[,，]/).map(s => s.trim()).filter(Boolean);
+      const volume = {
+        default: parseInt(document.getElementById('volumeDefault').value, 10) || 50,
+        min: parseInt(document.getElementById('volumeMin').value, 10) ?? 0,
+        max: parseInt(document.getElementById('volumeMax').value, 10) ?? 100,
+        step: parseInt(document.getElementById('volumeStep').value, 10) ?? 5
+      };
+      return {
+        enabled: document.getElementById('enabled').checked,
+        path: document.getElementById('path').value.trim() || 'xiaozhi-esp32',
+        asrProvider: document.getElementById('asrProvider').value,
+        asrEnabled: document.getElementById('asrEnabled').checked,
+        ttsProvider: document.getElementById('ttsProvider').value,
+        ttsEnabled: document.getElementById('ttsEnabled').checked,
+        workflows: workflows.length ? workflows : ['xiaozhi'],
+        persona: document.getElementById('persona').value.trim() || '你是一个简洁友好的设备语音助手，以地道中文回答。',
+        volume,
+        httpRedirectFrom: document.getElementById('httpRedirectFrom').value.trim(),
+        httpRedirectTo: document.getElementById('httpRedirectTo').value.trim(),
+        timeoutHello: parseInt(document.getElementById('timeoutHello').value, 10) || 10000,
+        timeoutConnection: parseInt(document.getElementById('timeoutConnection').value, 10) || 300000
+      };
+    };
 
     const refreshStatus = async () => {
+      const statusEl = document.getElementById('statusText');
+      const wsUrlEl = document.getElementById('wsUrlDisplay');
+      const connWrap = document.getElementById('connListWrap');
+      const connList = document.getElementById('connList');
       try {
-        const res = await fetch(apiBase + '/api/xiaozhi/status');
-        const json = await res.json();
-        const el = document.getElementById('statusText');
-        if (json.success && json.data) {
-          const d = json.data;
-          el.textContent = `服务${d.enabled ? '已启用' : '已禁用'} · WebSocket: /${d.path} · 当前连接: ${d.count || 0} 个`;
-        } else el.textContent = '无法获取状态';
-      } catch { document.getElementById('statusText').textContent = '无法获取状态'; }
+        const data = await fetchStatus();
+        if (!data) { statusEl.textContent = '无法获取状态'; return; }
+        statusEl.textContent = `服务${data.enabled ? '已启用' : '已禁用'} · WebSocket: /${data.path} · 当前连接: ${data.count ?? 0} 个`;
+        wsUrlEl.style.display = 'block';
+        wsUrlEl.textContent = '设备 OTA 将下发: ' + buildWsUrlPreview(data.path);
+        const conns = data.connections || [];
+        if (conns.length > 0) {
+          connWrap.style.display = 'block';
+          connList.innerHTML = conns.map(c =>
+            '<li>' + (c.device_id || c.session_id || '-') + (c.connected_at ? ' · ' + new Date(c.connected_at).toLocaleString() : '') + '</li>'
+          ).join('');
+        } else { connWrap.style.display = 'none'; connList.innerHTML = ''; }
+      } catch (e) {
+        statusEl.textContent = 'API 不可用: ' + e.message;
+        wsUrlEl.style.display = 'none';
+        connWrap.style.display = 'none';
+      }
     };
 
-    // 加载
-    fetchConfig().then(d => { loadForm(d); refreshStatus(); }).catch(e => showStatus('加载配置失败: ' + e.message, true));
-
-    // 保存
-    document.getElementById('saveBtn').addEventListener('click', async () => {
-      const data = collectForm();
+    // 先检测 status 再拉 config，充分利用路由并检测 API 连通性
+    (async function init() {
       try {
-        const res = await fetch(apiBase + '/api/xiaozhi/config', {
+        const statusData = await fetchStatus();
+        if (!statusData) {
+          document.getElementById('statusText').textContent = '状态接口异常';
+          showStatus('GET /api/xiaozhi/status 返回异常', true);
+          return;
+        }
+        await refreshStatus();
+        const configData = await fetchConfig();
+        loadForm(configData);
+      } catch (e) {
+        document.getElementById('statusText').textContent = 'API 不可用';
+        showStatus('检测失败: ' + e.message + '（请确认服务已启动且 /api/xiaozhi/* 可访问）', true);
+        return;
+      }
+      setInterval(refreshStatus, 10000);
+    })();
+
+    document.getElementById('path').addEventListener('input', function () { updateWsUrlPreview(this.value); });
+
+    // 保存（与当前配置合并）
+    document.getElementById('saveBtn').addEventListener('click', async () => {
+      try {
+        const existing = await fetchConfig();
+        const patch = collectForm();
+        const data = { ...existing, ...patch };
+        const res = await fetch(API.config, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ data })
         });
-        const json = await res.json();
-        if (json.success) showStatus('配置已保存');
-        else showStatus(json.message || '保存失败', true);
+        const json = await res.json().catch(() => ({}));
+        if (json.success) {
+          showStatus('配置已保存');
+          refreshStatus();
+        } else {
+          showStatus(json.message || '保存失败', true);
+        }
       } catch (e) {
         showStatus('保存失败: ' + e.message, true);
       }
