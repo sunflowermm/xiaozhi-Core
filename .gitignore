@@ -1,0 +1,39 @@
+# 参考 xiaozhi-esp32-server / xiaozhi-esp32 的 .gitignore，适配本 Core（Node + Python 脚本）
+
+# 依赖
+node_modules/
+
+# Python（scripts 下 opus 编解码）
+__pycache__/
+*.py[cod]
+*$py.class
+.venv/
+venv/
+env/
+.env
+
+# 构建/产物
+build/
+dist/
+*.egg-info/
+.eggs/
+
+# 日志与临时
+*.log
+tmp/
+.cache
+.DS_Store
+
+# 本地/敏感配置（若在此目录扩展）
+.config.yaml
+.secrets.yaml
+.private_config.yaml
+# 小智配置（由 index 生成默认，用户修改不纳入版本库）
+xiaozhi.yaml
+xiaozhi.yaml.* # 备份文件
+
+# 编辑器
+.vscode/
+.idea/
+*.iml
+.history

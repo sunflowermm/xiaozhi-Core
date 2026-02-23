@@ -1,0 +1,3 @@
+# TTS PCM→Opus 子进程 (pcm_to_opus_stream.py) 依赖
+opuslib_next==1.1.5
+# Windows 下若报 "Could not find Opus library"：pip install PyOgg 或 conda install libopus -y

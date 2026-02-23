@@ -1,0 +1,16 @@
+{
+  "name": "xiaozhi-Core",
+  "version": "1.0.0",
+  "description": "小智机器人 ESP32 对接，协议对齐 xiaozhi-esp32-server",
+  "type": "module",
+  "main": "tasker/xiaozhi-esp32.js",
+  "scripts": {
+    "test:tasker": "node scripts/test-xiaozhi-tasker.js"
+  },
+  "peerDependencies": {
+    "ulid": "^3.0.0"
+  },
+  "engines": {
+    "node": ">=20.0.0"
+  }
+}
