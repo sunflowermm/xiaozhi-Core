@@ -132,4 +132,3 @@ sequenceDiagram
 
 - 协议：[78/xiaozhi-esp32 WebSocket](https://github.com/78/xiaozhi-esp32/blob/main/docs/websocket.md)
 - 框架：[tasker-base-spec](../../../docs/tasker-base-spec.md)、[aistream](../../../docs/aistream.md)、[plugin-base](../../../docs/plugin-base.md)
-- 官方行为：`xiaozhi-esp32-server/docs/SERVER_BEHAVIOR_REFERENCE.md`
