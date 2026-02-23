@@ -71,6 +71,8 @@ const TTS_STOP_BUFFER_DRAIN_MS = (PRE_BUFFER_COUNT + 2) * AUDIO_FRAME_DURATION_M
 const VAD_SILENCE_RMS_THRESHOLD = 280;
 /** 服务端 VAD 结束：连续静音超过此值触发 endUtterance（对齐官方 Silero min_silence_duration_ms≈1000，auto 模式下设备不发 listen stop） */
 const SILENCE_END_MS = 900;
+/** 轮询间隔（ms）：TTS 排空、listen 前 drain 等，取小值以降低延迟、秒回应 */
+const DRAIN_POLL_MS = 10;
 
 /**
  * 状态机（对齐 xiaozhi-esp32-server ConnectionHandler）：
@@ -315,7 +317,7 @@ function createXiaozhiTasker() {
                 let frame = Array.isArray(conn.ttsOpusQueue) ? conn.ttsOpusQueue.shift() : undefined;
                 if (frame == null || (Buffer.isBuffer(frame) && frame.length === 0)) {
                     if (conn.ttsSource === 'play_music' && Array.isArray(conn.ttsOpusQueue) && conn.ttsOpusQueue.length === 0) {
-                        await new Promise(r => setTimeout(r, 8));
+                        await new Promise(r => setImmediate(r));
                         frame = conn.ttsOpusQueue.shift();
                     }
                     if (frame == null || (Buffer.isBuffer(frame) && frame.length === 0)) break;
@@ -399,9 +401,9 @@ function createXiaozhiTasker() {
             }
             const deadline = Date.now() + 5000;
             while (conn.opusTtsProcess && Date.now() < deadline) {
-                await new Promise(r => setTimeout(r, 50));
+                await new Promise(r => setTimeout(r, DRAIN_POLL_MS));
             }
-            while (conn.ttsOpusQueue?.length > 0 || conn.ttsSending) await new Promise(r => setTimeout(r, 20));
+            while (conn.ttsOpusQueue?.length > 0 || conn.ttsSending) await new Promise(r => setTimeout(r, DRAIN_POLL_MS));
             BotUtil.makeLog('info', `[Xiaozhi] TTS 队列已排空 入队=${conn._ttsOpusPushedCount ?? '-'} 已发=${conn.ttsSendPacketCount || 0}包 等${TTS_STOP_BUFFER_DRAIN_MS}ms`, deviceId);
             await new Promise(r => setTimeout(r, TTS_STOP_BUFFER_DRAIN_MS));
             BotUtil.makeLog('info', `[Xiaozhi] TTS flush 完成`, deviceId);
@@ -441,8 +443,7 @@ function createXiaozhiTasker() {
                     sendJsonToDevice(deviceId, { type: 'tts', state: 'start', _source: 'play_music' });
                     startTtsOpusProcess();
 
-                    const ua = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36';
-                    const headers = `Referer: https://music.163.com/\r\nUser-Agent: ${ua}`;
+                    const headers = Object.entries(MUSIC_FETCH_HEADERS).map(([k, v]) => `${k}: ${v}`).join('\r\n');
                     const ffmpegArgs = usePipe
                         ? ['-i', 'pipe:0', '-f', 's16le', '-ar', '24000', '-ac', '1', '-']
                         : ['-headers', headers, '-i', url, '-f', 's16le', '-ar', '24000', '-ac', '1', '-'];
@@ -533,7 +534,7 @@ function createXiaozhiTasker() {
             clearSpeakingState(deviceId, conn);
             const drainDeadline = Date.now() + 3000;
             while ((conn.ttsOpusQueue?.length > 0 || conn.ttsSending) && Date.now() < drainDeadline) {
-                await new Promise(r => setTimeout(r, 50));
+                await new Promise(r => setTimeout(r, DRAIN_POLL_MS));
             }
             conn.deviceState = 'listening';
         }
