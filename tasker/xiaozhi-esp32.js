@@ -823,7 +823,8 @@ function createXiaozhiTasker() {
             }
             if (!asrClient.sendAudio(pcm)) {
                 if (!conn.pcmBuffer) conn.pcmBuffer = [];
-                const maxBytes = (audioParams?.deviceSampleRate || 16000) * 2 * 5;
+                const sampleRate = conn.audioParams?.deviceSampleRate || 16000;
+                const maxBytes = sampleRate * 2 * 5; // 5 秒缓冲（16bit 单声道）
                 const total = conn.pcmBuffer.reduce((s, b) => s + b.length, 0);
                 if (total + pcm.length <= maxBytes) conn.pcmBuffer.push(pcm);
             }
