@@ -857,17 +857,30 @@ function createXiaozhiTasker() {
         await startAsrSessionIfListening(deviceId, conn);
     }
 
-    /** ASR 超时时通知设备退出监听并同步服务端状态，避免指示灯卡在“监听”需按两次/唤醒词无效 */
+    /** ASR 超时：
+     *  - 若设备仍处于 listening，则只重置当前会话并尝试续开一轮 ASR，保持「聆听中」不丢识别能力；
+     *  - 若设备不在 listening，则通知设备退出监听并同步为 idle，避免指示灯卡在“监听”。
+     */
     function onAsrTimeout(event) {
         if (event?.event_type !== 'asr_timeout') return;
         const deviceId = event.device_id;
         const hit = getConnByDevice(deviceId);
         if (!hit?.conn?.helloDone) return;
         const conn = hit.conn;
-        conn.deviceState = 'idle';
         conn.asrSessionId = null;
-        sendJsonToDevice(deviceId, { type: 'listen', state: 'stop' });
-        BotUtil.makeLog('debug', `[Xiaozhi] ASR 超时，已通知设备 listen stop，deviceState=idle`, deviceId);
+
+        if (conn.deviceState === 'listening') {
+            // 设备还在聆听，就地续开一轮 ASR，会话透明重连
+            startAsrSessionIfListening(deviceId, conn).catch((e) => {
+                BotUtil.makeLog('warn', `[Xiaozhi] ASR 超时后续开会话失败: ${e.message}`, deviceId);
+            });
+            BotUtil.makeLog('debug', `[Xiaozhi] ASR 超时，设备仍在 listening，已尝试续开会话`, deviceId);
+        } else {
+            // 设备不在聆听，按原语义通知退出监听
+            conn.deviceState = 'idle';
+            sendJsonToDevice(deviceId, { type: 'listen', state: 'stop' });
+            BotUtil.makeLog('debug', `[Xiaozhi] ASR 超时，已通知设备 listen stop，deviceState=idle`, deviceId);
+        }
     }
 
     function cleanupConn(conn) {
