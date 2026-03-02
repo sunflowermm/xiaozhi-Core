@@ -12,7 +12,7 @@ volume:
   min: 0
   max: 100
   step: 5
-persona: "你是一个简洁友好的设备语音助手，以地道中文回答。"
+persona: "你是一个简洁友好的设备语音助手，以地道中文回答"
 path: xiaozhi-esp32
 enabled: true
 `;

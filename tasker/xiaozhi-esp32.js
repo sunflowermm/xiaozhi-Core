@@ -191,6 +191,15 @@ function createXiaozhiTasker() {
                     return false;
                 }
                 return sendJsonToDevice(deviceId, { type: 'command', command: { command: cmd, parameters: params || {}, priority: priority ?? 0 } });
+            },
+            /** 直接透传 MCP tools/call 到设备，小智固件在设备侧实现具体工具逻辑 */
+            callMcpTool: async (toolName, args) => {
+                if (!toolName || typeof toolName !== 'string') return false;
+                return sendMcpToolCall(deviceId, toolName, args || {});
+            },
+            /** 主动切回待命（idle）状态：给设备发 listen.stop，和 ASR 超时场景一致 */
+            setIdle: async () => {
+                sendJsonToDevice(deviceId, { type: 'listen', state: 'stop' });
             }
         };
         Bot[botId] = bot;
@@ -409,10 +418,30 @@ function createXiaozhiTasker() {
             BotUtil.makeLog('info', `[Xiaozhi] TTS flush 完成`, deviceId);
         };
 
-        /** 点歌：url（mp3/mp4）转 24k PCM → Opus 流下发设备（与 TTS 同管道）。需本机已安装 ffmpeg 并加入 PATH。 */
+        /** 点歌：url（mp3/mp4）转 24k PCM → Opus 流下发设备（与 TTS 同管道）。需本机已安装 ffmpeg 并加入 PATH。
+         *  为避免音乐盖住回复内容，会在当前回复 TTS 结束或超时后再启动播放。 */
         bot.playAudioUrl = (url) => {
             if (!url || conn.ws?.readyState !== 1) return Promise.resolve();
             (async () => {
+                // 等待当前回复 TTS（ttsSource === 'tts'）结束再开始音乐，最多等待 8 秒
+                try {
+                    const MAX_WAIT_BEFORE_MUSIC = 8000;
+                    const waitStart = Date.now();
+                    while (true) {
+                        const hit = getConnByDevice(deviceId);
+                        const current = hit?.conn || conn;
+                        if (!current || current.ws?.readyState !== 1) break;
+                        const speakingReply = current.deviceState === 'speaking' && current.ttsSource === 'tts';
+                        if (!speakingReply) break;
+                        if (Date.now() - waitStart > MAX_WAIT_BEFORE_MUSIC) {
+                            BotUtil.makeLog('warn', '[Xiaozhi] 等待回复 TTS 结束超时，立即开始播放音乐', deviceId);
+                            break;
+                        }
+                        await new Promise(r => setTimeout(r, DRAIN_POLL_MS));
+                    }
+                } catch (e) {
+                    BotUtil.makeLog('warn', `[Xiaozhi] 等待回复 TTS 结束异常: ${e.message}`, deviceId);
+                }
                 const now = Date.now();
                 const last = playAudioLast.get(deviceId);
                 if (last && last.url === url && (now - last.time) / 1000 < PLAY_AUDIO_DEBOUNCE_SEC) {
@@ -749,8 +778,17 @@ function createXiaozhiTasker() {
     }
 
     function handleBinary(sessionId, data, conn) {
-        const { asrClient, audioParams } = conn;
-        if (!asrClient || !data?.length) return;
+        if (!data?.length) return;
+
+        // 若设备处于 listening 但还没有有效 ASR 会话，先补开一轮，避免 UI 显示聆听中但服务端不收音
+        if (conn.deviceState === 'listening' && !conn.asrSessionId) {
+            startAsrSessionIfListening(conn.deviceId, conn).catch((e) => {
+                BotUtil.makeLog('warn', `[Xiaozhi] handleBinary 补开 ASR 会话失败: ${e.message}`, conn.deviceId);
+            });
+        }
+
+        if (!conn.asrClient) return;
+
         const opusBuf = Buffer.isBuffer(data) ? data : Buffer.from(data);
         startAsrOpusProcess(conn);
         if (!conn.asrDecoderStdin?.writable) return;
@@ -776,6 +814,9 @@ function createXiaozhiTasker() {
             }
             conn._vadLastVoiceTime = Date.now();
             conn._vadSilenceStartTime = null;
+            const asrClient = conn.asrClient;
+            if (!asrClient) return;
+
             while (conn.pcmBuffer?.length > 0) {
                 const b = conn.pcmBuffer.shift();
                 if (b?.length) asrClient.sendAudio(b);
