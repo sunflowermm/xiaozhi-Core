@@ -42,6 +42,13 @@ export default class XiaozhiConfig extends ConfigBase {
             type: 'object',
             label: '音量控制',
             description: '设备音量相关配置',
+            component: 'SubForm',
+            default: {
+              default: 50,
+              min: 0,
+              max: 100,
+              step: 5
+            },
             fields: {
               default: {
                 type: 'number',
