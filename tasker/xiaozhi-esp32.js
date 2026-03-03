@@ -862,14 +862,8 @@ function createXiaozhiTasker() {
                 haveVoice = false;
             }
 
-            // auto/realtime 模式下，如果用户说话且当前在播「回复 TTS」，则中断当前 TTS（barge-in），manual 模式不打断；
-            // 播放音乐时（ttsSource === 'play_music'）不做打断，保持设备端状态为 Speaking，避免“聆听中”时还在放歌
-            if (haveVoice && conn.clientIsSpeaking && conn.clientListenMode !== 'manual' && conn.ttsSource !== 'play_music') {
-                BotUtil.makeLog('debug', `[Xiaozhi] VAD 检测到用户说话，打断当前 TTS`, conn.deviceId);
-                stopTts(conn.deviceId, conn, { force: true });
-                conn.clientAbort = false; // 这是新一轮对话，不视为“放弃本轮”
-                conn.deviceState = 'listening';
-            }
+            // 按你的需求：用户说话时不再通过 VAD 打断任何 TTS（无论是回复 TTS 还是播放音乐提示），
+            // 只保留按键/固件侧 Abort 的打断路径，避免「正在播放中」被服务端自动打断导致状态机混乱。
 
             if (conn.clientIsSpeaking) {
                 BotUtil.makeLog('debug', `[Xiaozhi] 二进制PCM 因 clientIsSpeaking 跳过送 ASR`, conn.deviceId);
