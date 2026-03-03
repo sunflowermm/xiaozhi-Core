@@ -301,6 +301,10 @@ function createXiaozhiTasker() {
             try { conn._playMusicFfmpeg.kill('SIGKILL'); } catch (_) {}
             conn._playMusicFfmpeg = null;
         }
+        // 清除当前设备的点歌防抖状态，确保手动停止或异常后可以立刻重新点歌
+        if (deviceId) {
+            playAudioLast.delete(deviceId);
+        }
     }
 
     /**
@@ -570,6 +574,31 @@ function createXiaozhiTasker() {
                             const errText = Buffer.concat(stderrChunks).toString('utf8').trim();
                             const lastLines = errText.split(/\r?\n/).filter(Boolean).slice(-6).join(' ');
                             BotUtil.makeLog('warn', `[Xiaozhi] 点歌 ffmpeg 退出 code=${code}${lastLines ? ` | ${lastLines}` : ''}`, deviceId);
+                            // 点歌失败时，主动用 TTS 提示用户，避免只在日志里报错
+                            try {
+                                const ttsConfig = getTtsConfig();
+                                const text = '抱歉，音乐播放失败，请换一首试试。';
+                                if (ttsConfig?.enabled && text) {
+                                    // 防御性：确保没有遗留的编码/播放任务
+                                    clearSpeakingState(deviceId, conn);
+                                    resetTtsFlowState(conn);
+                                    BotUtil.makeLog('info', `[Xiaozhi] 点歌失败提示 TTS 开始 文本=${text.length}字`, deviceId);
+                                    sendJsonToDevice(deviceId, { type: 'tts', state: 'start', _source: 'tts' });
+                                    sendJsonToDevice(deviceId, { type: 'tts', state: 'sentence_start', text });
+                                    try {
+                                        const xiaozhiTtsConfig = { ...ttsConfig, sampleRate: 24000, chunkMs: 60, encoding: 'pcm' };
+                                        const ttsClient = TTSFactory.createClient(deviceId, xiaozhiTtsConfig, Bot);
+                                        await ttsClient.synthesize(text, { sampleRate: 24000 });
+                                        if (typeof ttsClient.waitAudioSent === 'function') await ttsClient.waitAudioSent();
+                                        if (typeof conn.bot?.flushTtsOpus === 'function') await conn.bot.flushTtsOpus();
+                                    } catch (e) {
+                                        BotUtil.makeLog('error', `[Xiaozhi] 点歌失败提示 TTS 失败: ${e.message}`, deviceId);
+                                    }
+                                    stopTts(deviceId, conn, { force: true, source: 'tts' });
+                                }
+                            } catch (e) {
+                                BotUtil.makeLog('error', `[Xiaozhi] 点歌失败提示 TTS 触发异常: ${e.message}`, deviceId);
+                            }
                         }
                     });
                 } catch (e) {
