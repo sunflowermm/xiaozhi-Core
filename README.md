@@ -113,7 +113,7 @@ sequenceDiagram
 | [stream/xiaozhi.js](stream/xiaozhi.js) | 工作流（音量、点歌等），见 [aistream](../../../docs/aistream.md) |
 | [http/xiaozhi.js](http/xiaozhi.js) | HTTP：`/api/xiaozhi/config`、`/api/xiaozhi/status`，OTA `/xiaozhi/ota` |
 | [events/xiaozhi.js](events/xiaozhi.js) | 事件 `xiaozhi.device.*` → `PluginsLoader.deal` |
-| [commonconfig/xiaozhi.js](commonconfig/xiaozhi.js) | 配置 schema；配置文件为同目录下 `xiaozhi.yaml`（可由 index 生成默认） |
+| [commonconfig/xiaozhi.js](commonconfig/xiaozhi.js) | 配置 schema；配置文件为同目录下 `xiaozhi.yaml`（首次读取若不存在会自动创建默认） |
 | [scripts/pcm_to_opus_stream.py](scripts/pcm_to_opus_stream.py) | TTS：PCM → Opus 流 |
 | [scripts/opus_to_pcm_stream.py](scripts/opus_to_pcm_stream.py) | ASR：Opus → PCM 流 |
 | [scripts/requirements.txt](scripts/requirements.txt) | Python：opuslib_next；Windows 可 `pip install PyOgg` |

@@ -16,7 +16,7 @@ import TTSFactory from '../../../src/factory/tts/TTSFactory.js';
 import StreamLoader from '../../../src/infrastructure/aistream/loader.js';
 import { getAsrConfig, getTtsConfig, getLLMSettings } from '../../../src/utils/aistream-config.js';
 import { normalizeEmotionToDevice } from '../../../src/utils/emotion-utils.js';
-import XiaozhiConfig from '../commonconfig/xiaozhi.js';
+import { getXiaozhiConfig } from '../utils/config.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const SCRIPTS_DIR = path.resolve(__dirname, '..', 'scripts');
@@ -222,6 +222,12 @@ function createXiaozhiTasker() {
         const { sessionId, conn } = hit;
         const source = obj._source; // 'tts' | 'play_music'，仅内部用，不发给设备
         if (obj.type === 'tts' && obj.state === 'start') {
+            const now = Date.now();
+            // 去重：短时间重复 start 直接忽略
+            if (conn._lastTtsStartSentAt && (now - conn._lastTtsStartSentAt) < 150 && conn.clientIsSpeaking) {
+                return true;
+            }
+            conn._lastTtsStartSentAt = now;
             conn.clientIsSpeaking = true;
             conn.ttsSource = source || 'tts';
             conn.ttsSendPacketCount = 0;
@@ -230,10 +236,17 @@ function createXiaozhiTasker() {
             BotUtil.makeLog('debug', `[Xiaozhi] sendJson tts start → clientIsSpeaking=true ttsSource=${conn.ttsSource} deviceState=speaking`, deviceId);
         }
         if (obj.type === 'tts' && obj.state === 'stop') {
+            const now = Date.now();
+            // 去重：短时间重复 stop 直接忽略
+            if (conn._lastTtsStopSentAt && (now - conn._lastTtsStopSentAt) < 150 && !conn.clientIsSpeaking) {
+                return true;
+            }
+            conn._lastTtsStopSentAt = now;
             conn.clientIsSpeaking = false;
             conn.ttsSource = null;
-            conn.deviceState = 'idle';
-            BotUtil.makeLog('debug', `[Xiaozhi] sendJson tts stop → clientIsSpeaking=false deviceState=idle`, deviceId);
+            // 仅当之前处于 speaking 才拉回 idle，避免覆盖设备端自动回到 listening 的状态
+            if (conn.deviceState === 'speaking') conn.deviceState = 'idle';
+            BotUtil.makeLog('debug', `[Xiaozhi] sendJson tts stop → clientIsSpeaking=false deviceState=${conn.deviceState}`, deviceId);
         }
         if (obj.type === 'listen' && obj.state === 'stop') {
             conn.deviceState = 'idle';
@@ -250,22 +263,62 @@ function createXiaozhiTasker() {
         }
     }
 
+    /** 对齐 server audio_flow_control：开始一次新的 TTS/点歌会话前重置流控计数器与队列 */
+    function resetTtsFlowState(conn) {
+        if (!conn) return;
+        conn.ttsOpusQueue = [];
+        conn.ttsSendPacketCount = 0;
+        conn.ttsLastSendTime = 0;
+        conn.ttsSending = false;
+        conn._ttsOpusBytesSent = 0;
+        conn._ttsPcmChunkCount = 0;
+        conn._ttsOpusPushedCount = 0;
+        conn._ttsPaceStartTime = null;
+    }
+
     /**
-     * 统一「用户打断」状态同步（对齐 xiaozhi-esp32-server abortHandle + clearSpeakStatus + clear_queues）。
-     * 置 idle、清 TTS 队列、停推流、通知设备 tts stop、结束当前 ASR。
+     * 统一「停止说话」状态同步（对齐 xiaozhi-esp32-server abortHandle + clearSpeakStatus + clear_queues）。
+     * 只负责停止 TTS/清队列/同步 speaking 状态，不结束 ASR（ASR 结束由 listen stop / VAD 静音触发）。
      */
     function clearSpeakingState(deviceId, conn) {
         if (!conn) return;
+        // 仅做本地清理/停止编码与播放（发送 stop 由 stopTts() 统一处理，避免多处重复 stop）
         conn.clientIsSpeaking = false;
         conn.ttsSource = null;
-        conn.deviceState = 'idle';
+        if (conn.deviceState === 'speaking') conn.deviceState = 'idle';
         conn._ttsPaceStartTime = null;
-        if (conn.ttsOpusQueue?.length) conn.ttsOpusQueue.length = 0;
+        if (Array.isArray(conn.ttsOpusQueue)) conn.ttsOpusQueue.length = 0;
+        conn.ttsSending = false;
+        // 尽力停止 Opus 编码进程
         if (conn.opusTtsStdin?.writable) {
             try { conn.opusTtsStdin.end(); } catch (_) {}
         }
-        sendJsonToDevice(deviceId, { type: 'tts', state: 'stop' });
-        conn.asrClient?.endUtterance().catch(() => {});
+        if (conn.opusTtsProcess) {
+            try { conn.opusTtsProcess.kill(); } catch (_) {}
+        }
+        // 点歌 ffmpeg（若存在）也一并停止，避免后台继续写 PCM 造成串台
+        if (conn._playMusicFfmpeg) {
+            try { conn._playMusicFfmpeg.kill('SIGKILL'); } catch (_) {}
+            conn._playMusicFfmpeg = null;
+        }
+    }
+
+    /**
+     * 统一发送 tts stop（对齐 server：abort 只发一次 stop，再 clearSpeakStatus）
+     * @param {string} deviceId
+     * @param {*} conn
+     * @param {Object} [options]
+     * @param {boolean} [options.force] - 即使本地认为不在 speaking，也强制下发 stop（用于 abort/barge-in 防御）
+     */
+    function stopTts(deviceId, conn, options = {}) {
+        if (!conn) return;
+        const force = options.force === true;
+        const source = options.source || 'tts';
+        const shouldSend = force || conn.clientIsSpeaking || conn.deviceState === 'speaking';
+        if (shouldSend) {
+            sendJsonToDevice(deviceId, { type: 'tts', state: 'stop', _source: source });
+        }
+        clearSpeakingState(deviceId, conn);
     }
 
     /**
@@ -283,6 +336,85 @@ function createXiaozhiTasker() {
         conn.lastAsrText = '';
         // 防止 decoder 回调堆积导致旧 PCM 误送
         if (Array.isArray(conn.asrDecoderCbQueue)) conn.asrDecoderCbQueue.length = 0;
+    }
+
+    /**
+     * 延迟触发一段「提示性 TTS」（用于工具调用/慢响应：先说一句“我查一下”）
+     * 关键约束：不允许与正式回复 TTS 并发（否则会互相重置 opus 进程/队列导致截断）。
+     * @returns {{ cancel: Function, done: Promise<void> }}
+     */
+    function createDeferredProgressTts({ deviceId, conn, text, delayMs, Bot }) {
+        const state = {
+            timer: null,
+            started: false,
+            cancelled: false,
+            doneResolve: null,
+            done: null
+        };
+
+        state.done = new Promise((resolve) => {
+            state.doneResolve = resolve;
+        });
+
+        const safeResolve = () => {
+            try { state.doneResolve?.(); } catch (_) {}
+            state.doneResolve = null;
+        };
+
+        const cancel = () => {
+            state.cancelled = true;
+            if (state.timer) {
+                try { clearTimeout(state.timer); } catch (_) {}
+                state.timer = null;
+            }
+            // 若还没开始，直接结束
+            if (!state.started) safeResolve();
+        };
+
+        const run = async () => {
+            if (state.cancelled) return;
+            if (!text?.trim()) return;
+            // 不在 abort / 已在说话 / 未握手完成的情况下播报
+            if (conn.clientAbort) return;
+            if (!conn.helloDone) return;
+            if (conn.clientIsSpeaking) return;
+            // 仅当本轮 LLM 仍在等待时才播（避免 LLM 已返回但 timer 误触发）
+            if (!conn._llmWaitingForToolsOrSlow) return;
+
+            state.started = true;
+            try {
+                const ttsConfig = getTtsConfig();
+                if (!ttsConfig?.enabled) return;
+
+                BotUtil.makeLog('info', `[Xiaozhi] LLM较慢/工具调用中，先播提示TTS: "${text}"`, deviceId);
+                sendJsonToDevice(deviceId, { type: 'tts', state: 'start', _source: 'tts' });
+                sendJsonToDevice(deviceId, { type: 'tts', state: 'sentence_start', text });
+
+                const xiaozhiTtsConfig = { ...ttsConfig, sampleRate: 24000, chunkMs: 60, encoding: 'pcm' };
+                const ttsClient = TTSFactory.createClient(deviceId, xiaozhiTtsConfig, Bot);
+                await ttsClient.synthesize(text, { sampleRate: 24000 });
+                if (typeof ttsClient.waitAudioSent === 'function') await ttsClient.waitAudioSent();
+                if (typeof conn.bot?.flushTtsOpus === 'function') await conn.bot.flushTtsOpus();
+            } catch (e) {
+                BotUtil.makeLog('warn', `[Xiaozhi] 提示TTS失败: ${e.message}`, deviceId);
+            } finally {
+                try { stopTts(deviceId, conn, { force: true }); } catch (_) {}
+                safeResolve();
+            }
+        };
+
+        const d = Number.isFinite(Number(delayMs)) ? Math.max(0, Number(delayMs)) : 0;
+        if (d === 0) {
+            // 立即触发（不建议默认这样，但支持配置）
+            setImmediate(() => run().catch(() => safeResolve()));
+        } else {
+            state.timer = setTimeout(() => {
+                state.timer = null;
+                run().catch(() => safeResolve());
+            }, d);
+        }
+
+        return { cancel, done: state.done };
     }
 
     /** 发送 MCP tools/call 到设备（与 xiaozhi-esp32 固件 MCP 协议一致） */
@@ -327,10 +459,7 @@ function createXiaozhiTasker() {
         ws.send(JSON.stringify(response));
 
         // 设备端收裸 Opus 二进制，24kHz/60ms；TTS 由 Python (opuslib_next) 编码，流控前 5 包立即发，其后 60ms/包
-        if (!conn.ttsOpusQueue) conn.ttsOpusQueue = [];
-        conn.ttsSendPacketCount = 0;
-        conn.ttsLastSendTime = 0;
-        conn.ttsSending = false;
+        resetTtsFlowState(conn);
 
         // 流控对齐 xiaozhi-esp32-server：前 N 包立即发，之后按「起始时间 + 帧序号*60ms」节流，避免「上次发送+60ms」带来的漂移与卡顿
         async function drainTtsQueue() {
@@ -475,17 +604,9 @@ function createXiaozhiTasker() {
                     };
                     // URL 含 ?、& 时不能用 shell，否则 Windows 会把 & 当命令分隔符，导致 ffmpeg 把 https://music.163.com/ 当输出文件
                     if (process.platform === 'win32' && usePipe) opts.shell = true;
-                    conn.ttsOpusQueue = [];
-                    conn.ttsSendPacketCount = 0;
-                    conn.ttsLastSendTime = 0;
-                    conn._ttsOpusBytesSent = 0;
-                    conn._ttsPcmChunkCount = 0;
-                    conn._ttsOpusPushedCount = 0;
-                    if (conn.opusTtsStdin?.writable) {
-                        try { conn.opusTtsStdin.end(); } catch (_) {}
-                    }
-                    conn.opusTtsProcess = null;
-                    conn.opusTtsStdin = null;
+                    // 防御性：开始点歌前，确保上一轮 TTS/编码/播放已被清理干净
+                    clearSpeakingState(deviceId, conn);
+                    resetTtsFlowState(conn);
                     sendJsonToDevice(deviceId, { type: 'tts', state: 'start', _source: 'play_music' });
                     startTtsOpusProcess();
 
@@ -494,6 +615,7 @@ function createXiaozhiTasker() {
                         ? ['-i', 'pipe:0', '-f', 's16le', '-ar', '24000', '-ac', '1', '-']
                         : ['-headers', headers, '-i', url, '-f', 's16le', '-ar', '24000', '-ac', '1', '-'];
                     const ffmpeg = spawn('ffmpeg', ffmpegArgs, opts);
+                    conn._playMusicFfmpeg = ffmpeg;
                     let didError = false;
                     const stderrChunks = [];
                     if (usePipe) {
@@ -521,7 +643,8 @@ function createXiaozhiTasker() {
                     });
                     ffmpeg.on('close', async (code) => {
                         if (conn.bot?.flushTtsOpus) await conn.bot.flushTtsOpus();
-                        sendJsonToDevice(deviceId, { type: 'tts', state: 'stop' });
+                        conn._playMusicFfmpeg = null;
+                        stopTts(deviceId, conn, { force: true, source: 'play_music' });
                         if (code !== 0 && !didError) {
                             const errText = Buffer.concat(stderrChunks).toString('utf8').trim();
                             const lastLines = errText.split(/\r?\n/).filter(Boolean).slice(-6).join(' ');
@@ -530,7 +653,7 @@ function createXiaozhiTasker() {
                     });
                 } catch (e) {
                     BotUtil.makeLog('error', `[Xiaozhi] 点歌失败: ${e.message}`, deviceId);
-                    sendJsonToDevice(deviceId, { type: 'tts', state: 'stop' });
+                    stopTts(deviceId, conn, { force: true, source: 'play_music' });
                 }
             })();
             return Promise.resolve();
@@ -576,6 +699,12 @@ function createXiaozhiTasker() {
 
         // listen start：对齐 server 的 reset_audio_states；不要在这里强行 stop TTS（由 VAD/abort 决定是否打断）
         if (state === 'start') {
+            const now = Date.now();
+            // 设备端在网络抖动时可能重复发 start，这里做轻量去重，避免重复开 utterance
+            if (conn._lastListenStartAt && (now - conn._lastListenStartAt) < 200) {
+                return;
+            }
+            conn._lastListenStartAt = now;
             conn.clientAbort = false;
             resetAudioStates(conn);
             conn.deviceState = 'listening';
@@ -642,18 +771,15 @@ function createXiaozhiTasker() {
         BotUtil.makeLog('debug', `[Xiaozhi] runLLMAndTTS 入口 sessionId=${sessionId} textLen=${text?.length ?? 0}`, deviceId);
 
         try {
-        // 读取 xiaozhi 配置
-        let xiaozhiCfg;
-        try {
-            const xiaozhiConfig = new XiaozhiConfig();
-            xiaozhiCfg = await xiaozhiConfig.read();
-        } catch (e) {
-            BotUtil.makeLog('warn', `[Xiaozhi] 读取配置失败，使用默认: ${e.message}`, deviceId);
-            xiaozhiCfg = { workflows: ['xiaozhi'], persona: '你是一个简洁友好的设备语音助手，以地道中文回答。' };
-        }
+        // 读取 xiaozhi 配置（由 commonconfig/xiaozhi.js 管理；首次缺失会自动创建默认文件）
+        const xiaozhiCfg = await getXiaozhiConfig();
         
         const workflows = xiaozhiCfg?.workflows || ['xiaozhi'];
-        const persona = xiaozhiCfg?.persona || '你是一个简洁友好的设备语音助手，以地道中文回答。';
+        const persona = xiaozhiCfg?.persona || '你叫葵子，是一个简洁友好的设备语音助手，以地道中文回答。';
+        const progressCfg = xiaozhiCfg?.toolDelaySpeech || xiaozhiCfg?.tool_delay_speech || {};
+        const progressEnabled = progressCfg?.enabled !== false;
+        const progressDelayMs = progressCfg?.delayMs ?? progressCfg?.delay_ms ?? 1200;
+        const progressText = String(progressCfg?.text ?? progressCfg?.phrase ?? '我查一下，请稍等。');
         
         // 获取主工作流（第一个）
         const mainWorkflow = workflows[0] || 'xiaozhi';
@@ -688,13 +814,32 @@ function createXiaozhiTasker() {
 
         const deviceInfo = { device_id: deviceId, device_type: 'xiaozhi' };
         let aiResult;
+        let progress = null;
         try {
+            // 工具调用/慢响应时：延迟播一句提示，避免“长时间无声”让用户误以为卡住
+            conn._llmWaitingForToolsOrSlow = true;
+            progress = progressEnabled
+                ? createDeferredProgressTts({ deviceId, conn, text: progressText, delayMs: progressDelayMs, Bot })
+                : null;
             // 传递 deviceId 到工作流上下文，供 MCP 工具使用
             const executeContext = { deviceId, device_id: deviceId, ...deviceInfo };
-            aiResult = await stream.execute(deviceId, text, { ...streamConfig, persona, context: executeContext }, deviceInfo, persona);
+            // 对齐 StreamLoader.mergeStreams 的 execute 签名：(deviceId, question, apiConfig, persona)
+            aiResult = await stream.execute(deviceId, text, { ...streamConfig, persona, context: executeContext }, persona);
+            // LLM 返回后，停止进度提示；若已触发，等待其结束，避免与正式回复 TTS 并发/互相重置
+            conn._llmWaitingForToolsOrSlow = false;
+            progress?.cancel?.();
+            if (progress) {
+                try { await progress.done; } catch (_) {}
+            }
         } catch (e) {
             BotUtil.makeLog('error', `[Xiaozhi] LLM 执行失败: ${e.message}`, deviceId);
+            conn._llmWaitingForToolsOrSlow = false;
             return;
+        } finally {
+            // 防御性：避免异常路径未清理导致后续 timer 误触发
+            conn._llmWaitingForToolsOrSlow = false;
+            // 若异常提前返回，也确保 timer 被取消
+            try { progress?.cancel?.(); } catch (_) {}
         }
         BotUtil.makeLog('debug', `[Xiaozhi] runLLMAndTTS LLM 完成 有文本=${!!aiResult?.text}`, deviceId);
         if (!aiResult?.text) return;
@@ -707,7 +852,8 @@ function createXiaozhiTasker() {
             conn.asrClient.endUtterance().catch(() => {});
         }
         const emotion = normalizeEmotionToDevice(aiResult.emotion);
-        sendJsonToDevice(deviceId, { type: 'llm', session_id: sessionId, emotion: emotion || 'neutral', text: aiResult.text });
+        // 设备侧 session_id 以连接为准
+        sendJsonToDevice(deviceId, { type: 'llm', emotion: emotion || 'neutral', text: aiResult.text });
         const ttsConfig = getTtsConfig();
         // 仅当点歌占用管道时跳过回复 TTS，避免截断点歌；回复 TTS 的 clientIsSpeaking 会带 ttsSource='tts'
         if (conn.clientIsSpeaking && conn.ttsSource === 'play_music') {
@@ -715,16 +861,11 @@ function createXiaozhiTasker() {
             return;
         }
         if (ttsConfig.enabled) {
-            conn.ttsOpusQueue = [];
-            conn.ttsSendPacketCount = 0;
-            conn.ttsLastSendTime = 0;
-            conn._ttsOpusBytesSent = 0;
-            conn._ttsPcmChunkCount = 0;
-            conn._ttsOpusPushedCount = 0;
-            conn.opusTtsProcess = null;
-            conn.opusTtsStdin = null;
+            // 防御性：确保没有遗留的编码/播放任务
+            clearSpeakingState(deviceId, conn);
+            resetTtsFlowState(conn);
             BotUtil.makeLog('info', `[Xiaozhi] TTS 开始 文本=${aiResult.text?.length || 0}字 24k/60ms (Python Opus)`, deviceId);
-            sendJsonToDevice(deviceId, { type: 'tts', state: 'start' });
+            sendJsonToDevice(deviceId, { type: 'tts', state: 'start', _source: 'tts' });
             sendJsonToDevice(deviceId, { type: 'tts', state: 'sentence_start', text: aiResult.text });
             try {
                 const xiaozhiTtsConfig = { ...ttsConfig, sampleRate: 24000, chunkMs: 60, encoding: 'pcm' };
@@ -735,7 +876,7 @@ function createXiaozhiTasker() {
             } catch (e) {
                 BotUtil.makeLog('error', `[Xiaozhi] TTS 失败: ${e.message}`, deviceId);
             }
-            sendJsonToDevice(deviceId, { type: 'tts', state: 'stop' });
+            stopTts(deviceId, conn, { force: true, source: 'tts' });
             BotUtil.makeLog('debug', `[Xiaozhi] runLLMAndTTS 已发 tts stop，流程结束`, deviceId);
         }
         } finally {
@@ -747,7 +888,8 @@ function createXiaozhiTasker() {
         const { deviceId, bot } = conn;
         conn.clientAbort = true;
         resetAudioStates(conn);
-        clearSpeakingState(deviceId, conn);
+        // 对齐 server：abort 先发 tts stop，再 clearSpeakStatus/clear_queues
+        stopTts(deviceId, conn, { force: true });
         Bot.em('xiaozhi.device.abort', {
             self_id: bot.self_id,
             tasker: TASKER_ID,
@@ -797,7 +939,7 @@ function createXiaozhiTasker() {
             // auto/realtime 模式下，如果用户说话且当前在播 TTS，则中断当前 TTS（barge-in），manual 模式不打断
             if (haveVoice && conn.clientIsSpeaking && conn.clientListenMode !== 'manual') {
                 BotUtil.makeLog('debug', `[Xiaozhi] VAD 检测到用户说话，打断当前 TTS`, conn.deviceId);
-                clearSpeakingState(conn.deviceId, conn);
+                stopTts(conn.deviceId, conn, { force: true });
                 conn.clientAbort = false; // 这是新一轮对话，不视为“放弃本轮”
                 conn.deviceState = 'listening';
             }
@@ -807,6 +949,8 @@ function createXiaozhiTasker() {
                 return;
             }
 
+            // 重要：即使静音也要持续喂给 ASR，避免远端 ASR “等待下一包超时(8s)”而强制结束会话
+            // VAD 仅用于决定何时 endUtterance / 是否触发 barge-in
             if (!haveVoice) {
                 if (conn.clientListenMode !== 'manual' && conn._vadLastVoiceTime != null) {
                     conn._vadSilenceStartTime = conn._vadSilenceStartTime ?? Date.now();
@@ -816,10 +960,10 @@ function createXiaozhiTasker() {
                         conn.asrClient?.endUtterance().catch(() => {});
                     }
                 }
-                return;
+            } else {
+                conn._vadLastVoiceTime = Date.now();
+                conn._vadSilenceStartTime = null;
             }
-            conn._vadLastVoiceTime = Date.now();
-            conn._vadSilenceStartTime = null;
             const asrClient = conn.asrClient;
             if (!asrClient) return;
 
@@ -854,7 +998,8 @@ function createXiaozhiTasker() {
         const conn = connByDevice.conn;
         if (text) conn.lastAsrText = text;
 
-        sendJsonToDevice(deviceId, { type: 'stt', session_id: sessionId, text });
+        // 设备侧 session_id 以连接为准，这里的 utteranceId 仅服务端内部用
+        sendJsonToDevice(deviceId, { type: 'stt', text });
 
         if (!isFinal) return;
 
@@ -880,6 +1025,11 @@ function createXiaozhiTasker() {
         try { conn.asrDecoderProcess?.kill(); } catch (_) {}
         try { conn.opusTtsStdin?.destroy(); } catch (_) {}
         try { conn.opusTtsProcess?.kill(); } catch (_) {}
+        if (conn._vadResumeTimer) {
+            try { clearTimeout(conn._vadResumeTimer); } catch (_) {}
+            conn._vadResumeTimer = null;
+        }
+        conn.justWokenUp = false;
     }
 
     function handleDisconnect(sessionId) {
@@ -969,7 +1119,8 @@ function createXiaozhiTasker() {
             clientListenMode: 'auto',
             connectedAt: Date.now(),
             deviceState: 'idle',
-            clientAbort: false
+            clientAbort: false,
+            _llmWaitingForToolsOrSlow: false
         };
         connections.set(sessionId, conn);
 

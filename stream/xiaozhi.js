@@ -700,7 +700,7 @@ export default class XiaozhiStream extends AIStream {
   }
 
   buildSystemPrompt(context) {
-    const persona = context?.persona || '你是一个简洁友好的设备语音助手，以地道中文回答。';
+    const persona = context?.persona || '你叫葵子，是一个简洁友好的设备语音助手，以地道中文回答。';
     return `【人设】
 ${persona}
 

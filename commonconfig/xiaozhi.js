@@ -12,9 +12,15 @@ volume:
   min: 0
   max: 100
   step: 5
-persona: "你是一个简洁友好的设备语音助手，以地道中文回答"
+persona: "你叫葵子，是一个简洁友好的设备语音助手，以地道中文回答。"
 path: xiaozhi-esp32
 enabled: true
+
+# 工具调用/慢响应时，延迟播一句提示，避免“长时间无声”
+toolDelaySpeech:
+  enabled: true
+  delayMs: 1200
+  text: 我查一下，请稍等。
 `;
 
 /**
@@ -86,8 +92,52 @@ export default class XiaozhiConfig extends ConfigBase {
             type: 'string',
             label: '人设',
             description: '设备 AI 人设描述',
-            default: '你是一个简洁友好的设备语音助手，以地道中文回答。',
+            default: '你叫葵子，是一个简洁友好的设备语音助手，以地道中文回答。',
             component: 'TextArea'
+          },
+          path: {
+            type: 'string',
+            label: 'WebSocket 路径',
+            description: '设备连接的 WebSocket 路径（不含前导 /），需与固件配置一致',
+            default: 'xiaozhi-esp32',
+            component: 'Input'
+          },
+          enabled: {
+            type: 'boolean',
+            label: '启用',
+            description: '是否启用小智设备接入',
+            default: true,
+            component: 'Switch'
+          },
+          toolDelaySpeech: {
+            type: 'object',
+            label: '慢响应提示语音',
+            description: '当 LLM 工具调用/慢响应导致长时间无声时，延迟播报一句提示语（随后仍会继续等待最终结果）',
+            fields: {
+              enabled: {
+                type: 'boolean',
+                label: '启用',
+                description: '是否启用慢响应提示语音',
+                default: true,
+                component: 'Switch'
+              },
+              delayMs: {
+                type: 'number',
+                label: '延迟毫秒',
+                description: '超过该时间仍未返回结果，则先播报提示语音',
+                min: 0,
+                max: 60000,
+                default: 1200,
+                component: 'InputNumber'
+              },
+              text: {
+                type: 'string',
+                label: '提示文本',
+                description: '慢响应时播报的提示语',
+                default: '我查一下，请稍等。',
+                component: 'TextArea'
+              }
+            }
           }
         }
       }
