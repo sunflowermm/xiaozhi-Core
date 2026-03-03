@@ -338,85 +338,6 @@ function createXiaozhiTasker() {
         if (Array.isArray(conn.asrDecoderCbQueue)) conn.asrDecoderCbQueue.length = 0;
     }
 
-    /**
-     * 延迟触发一段「提示性 TTS」（用于工具调用/慢响应：先说一句“我查一下”）
-     * 关键约束：不允许与正式回复 TTS 并发（否则会互相重置 opus 进程/队列导致截断）。
-     * @returns {{ cancel: Function, done: Promise<void> }}
-     */
-    function createDeferredProgressTts({ deviceId, conn, text, delayMs, Bot }) {
-        const state = {
-            timer: null,
-            started: false,
-            cancelled: false,
-            doneResolve: null,
-            done: null
-        };
-
-        state.done = new Promise((resolve) => {
-            state.doneResolve = resolve;
-        });
-
-        const safeResolve = () => {
-            try { state.doneResolve?.(); } catch (_) {}
-            state.doneResolve = null;
-        };
-
-        const cancel = () => {
-            state.cancelled = true;
-            if (state.timer) {
-                try { clearTimeout(state.timer); } catch (_) {}
-                state.timer = null;
-            }
-            // 若还没开始，直接结束
-            if (!state.started) safeResolve();
-        };
-
-        const run = async () => {
-            if (state.cancelled) return;
-            if (!text?.trim()) return;
-            // 不在 abort / 已在说话 / 未握手完成的情况下播报
-            if (conn.clientAbort) return;
-            if (!conn.helloDone) return;
-            if (conn.clientIsSpeaking) return;
-            // 仅当本轮 LLM 仍在等待时才播（避免 LLM 已返回但 timer 误触发）
-            if (!conn._llmWaitingForToolsOrSlow) return;
-
-            state.started = true;
-            try {
-                const ttsConfig = getTtsConfig();
-                if (!ttsConfig?.enabled) return;
-
-                BotUtil.makeLog('info', `[Xiaozhi] LLM较慢/工具调用中，先播提示TTS: "${text}"`, deviceId);
-                sendJsonToDevice(deviceId, { type: 'tts', state: 'start', _source: 'tts' });
-                sendJsonToDevice(deviceId, { type: 'tts', state: 'sentence_start', text });
-
-                const xiaozhiTtsConfig = { ...ttsConfig, sampleRate: 24000, chunkMs: 60, encoding: 'pcm' };
-                const ttsClient = TTSFactory.createClient(deviceId, xiaozhiTtsConfig, Bot);
-                await ttsClient.synthesize(text, { sampleRate: 24000 });
-                if (typeof ttsClient.waitAudioSent === 'function') await ttsClient.waitAudioSent();
-                if (typeof conn.bot?.flushTtsOpus === 'function') await conn.bot.flushTtsOpus();
-            } catch (e) {
-                BotUtil.makeLog('warn', `[Xiaozhi] 提示TTS失败: ${e.message}`, deviceId);
-            } finally {
-                try { stopTts(deviceId, conn, { force: true }); } catch (_) {}
-                safeResolve();
-            }
-        };
-
-        const d = Number.isFinite(Number(delayMs)) ? Math.max(0, Number(delayMs)) : 0;
-        if (d === 0) {
-            // 立即触发（不建议默认这样，但支持配置）
-            setImmediate(() => run().catch(() => safeResolve()));
-        } else {
-            state.timer = setTimeout(() => {
-                state.timer = null;
-                run().catch(() => safeResolve());
-            }, d);
-        }
-
-        return { cancel, done: state.done };
-    }
-
     /** 发送 MCP tools/call 到设备（与 xiaozhi-esp32 固件 MCP 协议一致） */
     function sendMcpToolCall(deviceId, toolName, args) {
         const payload = {
@@ -776,16 +697,12 @@ function createXiaozhiTasker() {
         
         const workflows = xiaozhiCfg?.workflows || ['xiaozhi'];
         const persona = xiaozhiCfg?.persona || '你叫葵子，是一个简洁友好的设备语音助手，以地道中文回答。';
-        const progressCfg = xiaozhiCfg?.toolDelaySpeech || xiaozhiCfg?.tool_delay_speech || {};
-        const progressEnabled = progressCfg?.enabled !== false;
-        const progressDelayMs = progressCfg?.delayMs ?? progressCfg?.delay_ms ?? 1200;
-        const progressText = String(progressCfg?.text ?? progressCfg?.phrase ?? '我查一下，请稍等。');
         
         // 获取主工作流（第一个）
         const mainWorkflow = workflows[0] || 'xiaozhi';
         let stream = StreamLoader.getStream(mainWorkflow);
         
-        // 如果配置了多个工作流，合并它们
+        // 如果配置了多个工作流，合并它们（只合并 MCP 工具，不改 prompt 结构）
         if (workflows.length > 1) {
             const secondary = workflows.slice(1);
             const mergedName = `xiaozhi-${workflows.join('-')}`;
@@ -812,34 +729,14 @@ function createXiaozhiTasker() {
             streamConfig.streams = workflows;
         }
 
-        const deviceInfo = { device_id: deviceId, device_type: 'xiaozhi' };
+        const executeContext = { deviceId, device_id: deviceId, device_type: 'xiaozhi' };
         let aiResult;
-        let progress = null;
         try {
-            // 工具调用/慢响应时：延迟播一句提示，避免“长时间无声”让用户误以为卡住
-            conn._llmWaitingForToolsOrSlow = true;
-            progress = progressEnabled
-                ? createDeferredProgressTts({ deviceId, conn, text: progressText, delayMs: progressDelayMs, Bot })
-                : null;
-            // 传递 deviceId 到工作流上下文，供 MCP 工具使用
-            const executeContext = { deviceId, device_id: deviceId, ...deviceInfo };
             // 对齐 StreamLoader.mergeStreams 的 execute 签名：(deviceId, question, apiConfig, persona)
             aiResult = await stream.execute(deviceId, text, { ...streamConfig, persona, context: executeContext }, persona);
-            // LLM 返回后，停止进度提示；若已触发，等待其结束，避免与正式回复 TTS 并发/互相重置
-            conn._llmWaitingForToolsOrSlow = false;
-            progress?.cancel?.();
-            if (progress) {
-                try { await progress.done; } catch (_) {}
-            }
         } catch (e) {
             BotUtil.makeLog('error', `[Xiaozhi] LLM 执行失败: ${e.message}`, deviceId);
-            conn._llmWaitingForToolsOrSlow = false;
             return;
-        } finally {
-            // 防御性：避免异常路径未清理导致后续 timer 误触发
-            conn._llmWaitingForToolsOrSlow = false;
-            // 若异常提前返回，也确保 timer 被取消
-            try { progress?.cancel?.(); } catch (_) {}
         }
         BotUtil.makeLog('debug', `[Xiaozhi] runLLMAndTTS LLM 完成 有文本=${!!aiResult?.text}`, deviceId);
         if (!aiResult?.text) return;
@@ -1119,8 +1016,7 @@ function createXiaozhiTasker() {
             clientListenMode: 'auto',
             connectedAt: Date.now(),
             deviceState: 'idle',
-            clientAbort: false,
-            _llmWaitingForToolsOrSlow: false
+            clientAbort: false
         };
         connections.set(sessionId, conn);
 

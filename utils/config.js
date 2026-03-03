@@ -1,18 +1,13 @@
 /**
- * 读取 xiaozhi 配置（core/xiaozhi-Core/xiaozhi.yaml，由 ConfigLoader 注册为 xiaozhi）
+ * 读取 xiaozhi 配置
+ *
+ * 单一来源：
+ * - 由 commonconfig/xiaozhi.js 注册到 ConfigManager，负责 schema + 默认值 + 首次自动创建 yaml 文件
+ * - 这里仅通过 ConfigManager 读取一次，不再重复 new XiaozhiConfig，避免冗余配置入口
  */
 export async function getXiaozhiConfig() {
   const config = global.ConfigManager?.get('xiaozhi');
-  if (!config) {
-    // 兜底：在 ConfigManager 未初始化/未注册时，也能首次创建并读取默认配置文件
-    try {
-      const { default: XiaozhiConfig } = await import('../commonconfig/xiaozhi.js');
-      const c = new XiaozhiConfig();
-      return (await c.read(false)) || {};
-    } catch {
-      return {};
-    }
-  }
+  if (!config) return {};
   try {
     return (await config.read()) || {};
   } catch {
