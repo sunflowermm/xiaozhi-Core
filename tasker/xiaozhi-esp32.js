@@ -268,6 +268,23 @@ function createXiaozhiTasker() {
         conn.asrClient?.endUtterance().catch(() => {});
     }
 
+    /**
+     * 对齐 xiaozhi-esp32-server reset_audio_states：
+     * - 清 VAD 状态/缓冲
+     * - 清 ASR 缓冲/会话标识（但不强行关闭 ASR client）
+     * - 不在这里决定是否打断 TTS（由 VAD barge-in / abort 决定）
+     */
+    function resetAudioStates(conn) {
+        if (!conn) return;
+        conn.pcmBuffer = [];
+        conn.asrSessionId = null;
+        conn._vadLastVoiceTime = null;
+        conn._vadSilenceStartTime = null;
+        conn.lastAsrText = '';
+        // 防止 decoder 回调堆积导致旧 PCM 误送
+        if (Array.isArray(conn.asrDecoderCbQueue)) conn.asrDecoderCbQueue.length = 0;
+    }
+
     /** 发送 MCP tools/call 到设备（与 xiaozhi-esp32 固件 MCP 协议一致） */
     function sendMcpToolCall(deviceId, toolName, args) {
         const payload = {
@@ -557,30 +574,35 @@ function createXiaozhiTasker() {
 
         if (mode) conn.clientListenMode = mode;
 
-        // listen start：先同步后端状态（对齐官方 reset_audio_states + 清队列）；若 TTS 仍在排空则短暂等待再开 ASR
+        // listen start：对齐 server 的 reset_audio_states；不要在这里强行 stop TTS（由 VAD/abort 决定是否打断）
         if (state === 'start') {
             conn.clientAbort = false;
-            clearSpeakingState(deviceId, conn);
-            const drainDeadline = Date.now() + 3000;
-            while ((conn.ttsOpusQueue?.length > 0 || conn.ttsSending) && Date.now() < drainDeadline) {
-                await new Promise(r => setTimeout(r, DRAIN_POLL_MS));
-            }
+            resetAudioStates(conn);
             conn.deviceState = 'listening';
         }
 
         if (state === 'detect') {
-            // 对齐 xiaozhi-esp32-server：唤醒词（detect）直接当用户首句送入 LLM，保证对话连续
+            // 仅记录唤醒词文本，不再直接触发 LLM，避免「你好葵子你吃饭了吗」被拆成两轮对话
             const rawText = (message.text || '').trim();
             const wakeText = fixListenTextEncoding(rawText);
             if (wakeText) {
-                BotUtil.makeLog('info', `[Xiaozhi] 唤醒词触发首句: "${wakeText}"`, deviceId);
-                runLLMAndTTS(deviceId, sessionId, wakeText, conn).catch(e =>
-                    BotUtil.makeLog('error', `[Xiaozhi] 唤醒词 LLM/TTS 失败: ${e.message}`, deviceId)
-                );
+                BotUtil.makeLog('info', `[Xiaozhi] 唤醒词检测: "${wakeText}"`, deviceId);
             }
+            resetAudioStates(conn);
+            // 刚被唤醒时短暂忽略 VAD 检测，防止唤醒提示音/残留被当成语音
+            conn.justWokenUp = true;
+            if (conn._vadResumeTimer) {
+                clearTimeout(conn._vadResumeTimer);
+            }
+            conn._vadResumeTimer = setTimeout(() => {
+                conn.justWokenUp = false;
+                conn._vadResumeTimer = null;
+            }, 2000);
         }
         if (state === 'start') {
-            conn.asrSessionId = sessionId;
+            // 每次 start 都生成一个新的 utteranceId，避免复用连接 sessionId 导致 cleanup/timeout 串台
+            const utteranceId = ulid();
+            conn.asrSessionId = utteranceId;
             conn.pcmBuffer = [];
             conn._vadLastVoiceTime = null;
             conn._vadSilenceStartTime = null;
@@ -590,7 +612,7 @@ function createXiaozhiTasker() {
                     const config = { ...asrConfig, idleCloseMs: 0 };
                     const client = conn.asrClient || ASRFactory.createClient(deviceId, config, Bot);
                     if (!conn.asrClient) conn.asrClient = client;
-                    await client.beginUtterance(sessionId, {
+                    await client.beginUtterance(utteranceId, {
                         sample_rate: conn.audioParams?.deviceSampleRate || 16000,
                         channels: 1,
                         format: 'pcm',
@@ -603,32 +625,6 @@ function createXiaozhiTasker() {
         } else if (state === 'stop' && conn.asrClient) {
             BotUtil.makeLog('debug', `[Xiaozhi] handleListen 收到 stop 结束 ASR`, deviceId);
             conn.asrClient.endUtterance().catch(e => BotUtil.makeLog('warn', `[Xiaozhi] ASR 结束: ${e.message}`, deviceId));
-        }
-    }
-
-    /** 在设备仍处于 listening 时开启新一轮 ASR 会话，避免“会话结束但设备还在监听”导致后续语音无法识别 */
-    async function startAsrSessionIfListening(deviceId, conn) {
-        if (conn.deviceState !== 'listening' || conn.asrSessionId != null) return;
-        const asrConfig = getAsrConfig();
-        if (!asrConfig?.enabled) return;
-        try {
-            const newSessionId = ulid();
-            conn.asrSessionId = newSessionId;
-            conn.pcmBuffer = [];
-            conn._vadLastVoiceTime = null;
-            conn._vadSilenceStartTime = null;
-            const client = conn.asrClient || ASRFactory.createClient(deviceId, { ...asrConfig, idleCloseMs: 0 }, Bot);
-            if (!conn.asrClient) conn.asrClient = client;
-            await client.beginUtterance(newSessionId, {
-                sample_rate: conn.audioParams?.deviceSampleRate || 16000,
-                channels: 1,
-                format: 'pcm',
-                codec: 'pcm'
-            });
-            BotUtil.makeLog('debug', `[Xiaozhi] 续接 ASR 会话（设备仍在监听）: ${newSessionId}`, deviceId);
-        } catch (e) {
-            BotUtil.makeLog('warn', `[Xiaozhi] 续接 ASR 失败: ${e.message}`, deviceId);
-            conn.asrSessionId = null;
         }
     }
 
@@ -750,6 +746,7 @@ function createXiaozhiTasker() {
     function handleAbort(sessionId, message, conn) {
         const { deviceId, bot } = conn;
         conn.clientAbort = true;
+        resetAudioStates(conn);
         clearSpeakingState(deviceId, conn);
         Bot.em('xiaozhi.device.abort', {
             self_id: bot.self_id,
@@ -780,13 +777,6 @@ function createXiaozhiTasker() {
     function handleBinary(sessionId, data, conn) {
         if (!data?.length) return;
 
-        // 若设备处于 listening 但还没有有效 ASR 会话，先补开一轮，避免 UI 显示聆听中但服务端不收音
-        if (conn.deviceState === 'listening' && !conn.asrSessionId) {
-            startAsrSessionIfListening(conn.deviceId, conn).catch((e) => {
-                BotUtil.makeLog('warn', `[Xiaozhi] handleBinary 补开 ASR 会话失败: ${e.message}`, conn.deviceId);
-            });
-        }
-
         if (!conn.asrClient) return;
 
         const opusBuf = Buffer.isBuffer(data) ? data : Buffer.from(data);
@@ -795,13 +785,29 @@ function createXiaozhiTasker() {
         if (!conn.asrDecoderCbQueue) conn.asrDecoderCbQueue = [];
         conn.asrDecoderCbQueue.push((pcm) => {
             if (!pcm?.length) return;
+
+            const rms = pcmRms(pcm);
+            let haveVoice = rms >= VAD_SILENCE_RMS_THRESHOLD;
+
+            // 刚唤醒的短时间内忽略 VAD，避免把提示音当成说话
+            if (conn.justWokenUp) {
+                haveVoice = false;
+            }
+
+            // auto/realtime 模式下，如果用户说话且当前在播 TTS，则中断当前 TTS（barge-in），manual 模式不打断
+            if (haveVoice && conn.clientIsSpeaking && conn.clientListenMode !== 'manual') {
+                BotUtil.makeLog('debug', `[Xiaozhi] VAD 检测到用户说话，打断当前 TTS`, conn.deviceId);
+                clearSpeakingState(conn.deviceId, conn);
+                conn.clientAbort = false; // 这是新一轮对话，不视为“放弃本轮”
+                conn.deviceState = 'listening';
+            }
+
             if (conn.clientIsSpeaking) {
                 BotUtil.makeLog('debug', `[Xiaozhi] 二进制PCM 因 clientIsSpeaking 跳过送 ASR`, conn.deviceId);
                 return;
             }
-            const rms = pcmRms(pcm);
-            const isVoice = rms >= VAD_SILENCE_RMS_THRESHOLD;
-            if (!isVoice) {
+
+            if (!haveVoice) {
                 if (conn.clientListenMode !== 'manual' && conn._vadLastVoiceTime != null) {
                     conn._vadSilenceStartTime = conn._vadSilenceStartTime ?? Date.now();
                     if (Date.now() - conn._vadSilenceStartTime >= SILENCE_END_MS) {
@@ -854,13 +860,9 @@ function createXiaozhiTasker() {
 
         conn.asrSessionId = null;
         await runLLMAndTTS(deviceId, sessionId, text, conn);
-        await startAsrSessionIfListening(deviceId, conn);
     }
 
-    /** ASR 超时：
-     *  - 若设备仍处于 listening，则只重置当前会话并尝试续开一轮 ASR，保持「聆听中」不丢识别能力；
-     *  - 若设备不在 listening，则通知设备退出监听并同步为 idle，避免指示灯卡在“监听”。
-     */
+    /** ASR 超时：仅重置当前会话，由设备/上层主动决定何时重新开始监听，避免在这里强行 send listen stop 导致状态机错乱。 */
     function onAsrTimeout(event) {
         if (event?.event_type !== 'asr_timeout') return;
         const deviceId = event.device_id;
@@ -868,19 +870,7 @@ function createXiaozhiTasker() {
         if (!hit?.conn?.helloDone) return;
         const conn = hit.conn;
         conn.asrSessionId = null;
-
-        if (conn.deviceState === 'listening') {
-            // 设备还在聆听，就地续开一轮 ASR，会话透明重连
-            startAsrSessionIfListening(deviceId, conn).catch((e) => {
-                BotUtil.makeLog('warn', `[Xiaozhi] ASR 超时后续开会话失败: ${e.message}`, deviceId);
-            });
-            BotUtil.makeLog('debug', `[Xiaozhi] ASR 超时，设备仍在 listening，已尝试续开会话`, deviceId);
-        } else {
-            // 设备不在聆听，按原语义通知退出监听
-            conn.deviceState = 'idle';
-            sendJsonToDevice(deviceId, { type: 'listen', state: 'stop' });
-            BotUtil.makeLog('debug', `[Xiaozhi] ASR 超时，已通知设备 listen stop，deviceState=idle`, deviceId);
-        }
+        BotUtil.makeLog('debug', `[Xiaozhi] ASR 超时事件，已清理当前会话 sessionId=${event.session_id}`, deviceId);
     }
 
     function cleanupConn(conn) {
