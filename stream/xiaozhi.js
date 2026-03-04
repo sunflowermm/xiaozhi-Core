@@ -190,11 +190,50 @@ export default class XiaozhiStream extends AIStream {
         if (!bot || typeof bot.callMcpTool !== 'function') {
           return this.errorResponse('DEVICE_NOT_FOUND', `设备 ${deviceId} 未连接或不支持 MCP 工具`);
         }
-        // 目前设备侧 MCP 响应不会直接回传到此方法，因此这里只负责触发设备上报状态
-        await bot.callMcpTool('self.get_device_status', {});
-        return this.successResponse({
-          message: '已请求设备上报当前状态，请在设备界面或后续事件中查看。'
-        });
+        const parseMcpText = (raw) => {
+          if (raw == null) return null;
+          if (typeof raw === 'object') return raw;
+          const text = String(raw).trim();
+          if (!text) return null;
+          try {
+            return JSON.parse(text);
+          } catch {
+            return { text };
+          }
+        };
+
+        const unwrapResult = (result) => {
+          // 兼容 jsonrpc result: { content: [{ type:'text', text:'...' }], isError:false }
+          if (result && typeof result === 'object') {
+            if (Array.isArray(result.content) && result.content[0] && typeof result.content[0].text === 'string') {
+              return result.content[0].text;
+            }
+            if (typeof result.text === 'string') return result.text;
+          }
+          return result;
+        };
+
+        // 等待设备回包（若设备/固件不回包，则回退到缓存）
+        try {
+          const result = await bot.callMcpTool('self.get_device_status', {}, { awaitResult: true, timeoutMs: 3000 });
+          const data = parseMcpText(unwrapResult(result));
+          return this.successResponse({
+            message: '已获取设备状态',
+            deviceId,
+            data: data ?? result
+          });
+        } catch (e) {
+          const cached = bot?._mcpCache?.deviceStatus;
+          if (cached?.payload) {
+            return this.successResponse({
+              message: '设备未及时回包，已返回最近一次缓存状态',
+              deviceId,
+              cachedAt: cached.ts,
+              data: cached.payload
+            });
+          }
+          return this.errorResponse('TIMEOUT', `获取设备状态超时：${e.message}`);
+        }
       },
       enabled: true
     });
@@ -707,7 +746,8 @@ ${persona}
 【规则】
 1. 尽量简洁，优先中文
 2. 用户要点歌时，使用 play_music 工具传入歌名，自动播放搜索列表第一首；若工具返回「正在播放中」则勿再调用
-3. 不要输出多余解释`;
+3. 需要查询设备状态时，使用 get_device_status 工具并等待结果；同一问题只调用一次，拿到结果后直接回答，不要循环调用
+4. 不要输出多余解释`;
   }
 
   async buildChatContext(e, question) {

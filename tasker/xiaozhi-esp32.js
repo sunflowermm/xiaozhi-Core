@@ -32,6 +32,9 @@ const WS_PATH = 'xiaozhi-esp32';
 const PLAY_AUDIO_DEBOUNCE_SEC = 15;
 const playAudioLast = new Map();
 
+/** 设备 MCP 工具调用默认等待超时（ms） */
+const MCP_CALL_TIMEOUT_MS = 3500;
+
 const MUSIC_FETCH_HEADERS = {
   'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
   Referer: 'https://music.163.com/'
@@ -193,9 +196,12 @@ function createXiaozhiTasker() {
                 return sendJsonToDevice(deviceId, { type: 'command', command: { command: cmd, parameters: params || {}, priority: priority ?? 0 } });
             },
             /** 直接透传 MCP tools/call 到设备，小智固件在设备侧实现具体工具逻辑 */
-            callMcpTool: async (toolName, args) => {
+            callMcpTool: async (toolName, args, options = {}) => {
                 if (!toolName || typeof toolName !== 'string') return false;
-                return sendMcpToolCall(deviceId, toolName, args || {});
+                if (options?.awaitResult === true) {
+                    return await callDeviceMcpTool(deviceId, toolName, args || {}, options);
+                }
+                return sendMcpToolCall(deviceId, toolName, args || {}, options?.id);
             },
             /** 主动切回待命（idle）状态：给设备发 listen.stop，和 ASR 超时场景一致 */
             setIdle: async () => {
@@ -343,14 +349,51 @@ function createXiaozhiTasker() {
     }
 
     /** 发送 MCP tools/call 到设备（与 xiaozhi-esp32 固件 MCP 协议一致） */
-    function sendMcpToolCall(deviceId, toolName, args) {
+    function sendMcpToolCall(deviceId, toolName, args, callId) {
         const payload = {
             jsonrpc: '2.0',
-            id: Date.now(),
+            id: callId ?? Date.now(),
             method: 'tools/call',
             params: { name: toolName, arguments: args || {} }
         };
         return sendJsonToDevice(deviceId, { type: 'mcp', payload });
+    }
+
+    function withTimeout(promise, timeoutMs, message) {
+        const ms = Number(timeoutMs);
+        if (!Number.isFinite(ms) || ms <= 0) return promise;
+        return Promise.race([
+            promise,
+            new Promise((_, reject) => setTimeout(() => reject(new Error(message || '请求超时')), ms))
+        ]);
+    }
+
+    /**
+     * 调用设备侧 MCP 工具并等待回包（handleMCP 内 resolve/reject）
+     * 返回 payload.result（若没有则返回 payload），让上层决定如何解析 content/text。
+     */
+    async function callDeviceMcpTool(deviceId, toolName, args, options = {}) {
+        const hit = getConnByDevice(deviceId);
+        const conn = hit?.conn;
+        if (!conn?.helloDone || conn.ws?.readyState !== 1) {
+            throw new Error(`设备未连接：${deviceId}`);
+        }
+        if (!toolName || typeof toolName !== 'string') {
+            throw new Error('toolName 不能为空');
+        }
+        if (!conn.mcpPending) conn.mcpPending = new Map();
+
+        const id = Number.isSafeInteger(options.id) ? options.id : Date.now();
+        const p = new Promise((resolve, reject) => {
+            conn.mcpPending.set(id, { resolve, reject, toolName, ts: Date.now() });
+        });
+        const ok = sendMcpToolCall(deviceId, toolName, args || {}, id);
+        if (!ok) {
+            conn.mcpPending.delete(id);
+            throw new Error('下发 MCP tools/call 失败');
+        }
+        const timeoutMs = Number.isFinite(options.timeoutMs) ? options.timeoutMs : MCP_CALL_TIMEOUT_MS;
+        return await withTimeout(p, timeoutMs, `MCP 工具调用超时: ${toolName}`);
     }
 
     async function handleHello(sessionId, message, conn) {
@@ -830,6 +873,38 @@ function createXiaozhiTasker() {
 
     function handleMCP(sessionId, message, conn) {
         const { deviceId, bot } = conn;
+        const payload = message?.payload;
+
+        // 1) 优先匹配 tools/call 的回包，给上层工具调用一个“真实结果”
+        try {
+            const msgId = payload?.id;
+            if (msgId != null && conn?.mcpPending?.has(msgId)) {
+                const pending = conn.mcpPending.get(msgId);
+                conn.mcpPending.delete(msgId);
+                if (payload?.error) {
+                    pending?.reject?.(new Error(payload?.error?.message || 'MCP 工具返回 error'));
+                } else {
+                    pending?.resolve?.(payload?.result ?? payload);
+                }
+            }
+        } catch (e) {
+            BotUtil.makeLog('warn', `[Xiaozhi] MCP 回包处理失败: ${e.message}`, deviceId);
+        }
+
+        // 2) 缓存常用结果：get_device_status 等一次调用即可取到数据
+        try {
+            if (!conn.mcpCache) conn.mcpCache = {};
+            const toolName = payload?.result?.name || payload?.params?.name || payload?.name;
+            if (toolName === 'self.get_device_status') {
+                conn.mcpCache.deviceStatus = { payload: payload?.result ?? payload, ts: Date.now() };
+                // 同步到 bot，方便工作流侧直接读取
+                if (bot) {
+                    if (!bot._mcpCache) bot._mcpCache = {};
+                    bot._mcpCache.deviceStatus = conn.mcpCache.deviceStatus;
+                }
+            }
+        } catch (_) { /* ignore */ }
+
         Bot.em('xiaozhi.device.mcp', {
             self_id: bot.self_id,
             tasker: TASKER_ID,
@@ -838,7 +913,7 @@ function createXiaozhiTasker() {
             bot,
             device_id: deviceId,
             session_id: sessionId,
-            payload: message.payload
+            payload
         });
     }
 
@@ -864,11 +939,6 @@ function createXiaozhiTasker() {
 
             // 按你的需求：用户说话时不再通过 VAD 打断任何 TTS（无论是回复 TTS 还是播放音乐提示），
             // 只保留按键/固件侧 Abort 的打断路径，避免「正在播放中」被服务端自动打断导致状态机混乱。
-
-            if (conn.clientIsSpeaking) {
-                BotUtil.makeLog('debug', `[Xiaozhi] 二进制PCM 因 clientIsSpeaking 跳过送 ASR`, conn.deviceId);
-                return;
-            }
 
             // 重要：即使静音也要持续喂给 ASR，避免远端 ASR “等待下一包超时(8s)”而强制结束会话
             // VAD 仅用于决定何时 endUtterance / 是否触发 barge-in
@@ -1040,7 +1110,9 @@ function createXiaozhiTasker() {
             clientListenMode: 'auto',
             connectedAt: Date.now(),
             deviceState: 'idle',
-            clientAbort: false
+            clientAbort: false,
+            mcpPending: new Map(),
+            mcpCache: {}
         };
         connections.set(sessionId, conn);
 
