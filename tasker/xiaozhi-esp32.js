@@ -1139,7 +1139,11 @@ function createXiaozhiTasker() {
         load() {
             const mount = (pathKey) => {
                 if (!Array.isArray(Bot.wsf[pathKey])) Bot.wsf[pathKey] = [];
-                Bot.wsf[pathKey].push((conn, req, socket, head) => handleConnection(conn, req, socket, head));
+                Bot.wsf[pathKey].push({
+                    handler: (conn, req, socket, head) => handleConnection(conn, req, socket, head),
+                    // xiaozhi-esp32 走设备级自定义鉴权/配对逻辑，跳过系统级 API Key 鉴权
+                    skipAuth: true
+                });
             };
             mount(WS_PATH);
             if (WS_PATH_LEGACY && WS_PATH_LEGACY !== WS_PATH) mount(WS_PATH_LEGACY);
