@@ -1,24 +1,32 @@
-# xiaozhi-Core
+<div align="center">
 
-> XRK-AGT 的 **xiaozhi-esp32** 对接模块，实现 [78/xiaozhi-esp32](https://github.com/78/xiaozhi-esp32) WebSocket 协议，小智固件直连即走 **ASR→LLM→TTS**，语音识别与合成零延迟、秒回应。
+# 🎤 xiaozhi-Core
+
+**XRK-AGT 的 xiaozhi-esp32 对接模块：实现 [78/xiaozhi-esp32](https://github.com/78/xiaozhi-esp32) WebSocket 协议，小智固件直连即走 ASR→LLM→TTS，语音识别与合成零延迟、秒回应。**
+
+[![XRK-AGT](https://img.shields.io/badge/XRK--AGT-runtime-blue.svg)](https://github.com/sunflowermm/XRK-AGT)
+[![xiaozhi-esp32](https://img.shields.io/badge/协议-xiaozhi--esp32-green.svg)](https://github.com/78/xiaozhi-esp32)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](./LICENSE)
+
+</div>
 
 ---
 
-## 导航
+## 📑 导航
 
 | 小节 | 说明 |
 |------|------|
-| [连接](#连接) | WebSocket 路径、URL、请求头 |
-| [协议要点](#协议要点) | hello / listen / Opus 流程 |
-| [AGT 框架优势](#agt-框架优势) | 为何选 AGT、与官方 server 对比 |
-| [架构与流程](#架构与流程) | Mermaid 架构图与时序图 |
-| [目录](#目录) | 本 Core 文件与职责 |
-| [使用](#使用) | 自测、Python 依赖 |
-| [文档](#文档) | 协议与框架文档链接 |
+| [连接](#-连接) | WebSocket 路径、URL、请求头 |
+| [协议要点](#-协议要点) | hello / listen / Opus 流程 |
+| [AGT 框架优势](#-agt-框架优势) | 为何选 AGT、与官方 server 对比 |
+| [架构与流程](#-架构与流程) | Mermaid 架构图与时序图 |
+| [目录](#-目录) | 本 Core 文件与职责 |
+| [使用](#-使用) | 自测、Python 依赖 |
+| [文档与许可证](#-文档与许可证) | 协议链接、MIT 许可证 |
 
 ---
 
-## 连接
+## 🔌 连接
 
 - **路径**：`/xiaozhi-esp32`（主）、`/xiaozhi/v1`（兼容官方）
 - **URL**：`ws://<服务器>:<端口>/xiaozhi-esp32`
@@ -27,15 +35,15 @@
 
 ---
 
-## 协议要点
+## 📋 协议要点
 
 - **hello** → 服务端回 **hello**（`session_id`、`audio_params`）
 - **listen**（`state: start/stop/detect`）+ 可选二进制 Opus
-- **Opus**：由 Python (opuslib_next) 子进程编解码，Node 做管道与流控；支持 **abort**、**mcp**、**system**
+- **Opus**：由 Python（opuslib_next）子进程编解码，Node 做管道与流控；支持 **abort**、**mcp**、**system**
 
 ---
 
-## AGT 框架优势
+## ✨ AGT 框架优势
 
 在 AGT 上跑 xiaozhi-Core，相比单独部署官方 xiaozhi-esp32-server，具有以下优势：
 
@@ -49,7 +57,7 @@
 
 ---
 
-## 架构与流程
+## 🔄 架构与流程
 
 ### 在 AGT 中的位置
 
@@ -105,7 +113,7 @@ sequenceDiagram
 
 ---
 
-## 目录
+## 🗂️ 目录
 
 | 目录/文件 | 说明 |
 |-----------|------|
@@ -113,7 +121,7 @@ sequenceDiagram
 | [stream/xiaozhi.js](stream/xiaozhi.js) | 工作流（音量、点歌等），见 [aistream](../../../docs/aistream.md) |
 | [http/xiaozhi.js](http/xiaozhi.js) | HTTP：`/api/xiaozhi/config`、`/api/xiaozhi/status`，OTA `/xiaozhi/ota` |
 | [events/xiaozhi.js](events/xiaozhi.js) | 事件 `xiaozhi.device.*` → `PluginsLoader.deal` |
-| [commonconfig/xiaozhi.js](commonconfig/xiaozhi.js) | 配置 schema；配置文件为同目录下 `xiaozhi.yaml`（首次读取若不存在会自动创建默认） |
+| [commonconfig/xiaozhi.js](commonconfig/xiaozhi.js) | 配置 Schema；配置文件为 **Core 根目录** `xiaozhi.yaml`（即 `core/xiaozhi-Core/xiaozhi.yaml`），首次读取若不存在会自动创建默认 |
 | [scripts/pcm_to_opus_stream.py](scripts/pcm_to_opus_stream.py) | TTS：PCM → Opus 流 |
 | [scripts/opus_to_pcm_stream.py](scripts/opus_to_pcm_stream.py) | ASR：Opus → PCM 流 |
 | [scripts/requirements.txt](scripts/requirements.txt) | Python：opuslib_next；Windows 可 `pip install PyOgg` |
@@ -121,21 +129,21 @@ sequenceDiagram
 
 ---
 
-## 使用
+## 🚀 使用
 
 - **自测**（项目根）：`node core/xiaozhi-Core/scripts/test-xiaozhi-tasker.js` 或 `cd core/xiaozhi-Core && pnpm run test:tasker`
 - **Python 依赖**：`pip install -r core/xiaozhi-Core/scripts/requirements.txt`
 
 ---
 
-## 文档
+## 📄 文档与许可证
 
-- 协议：[78/xiaozhi-esp32 WebSocket](https://github.com/78/xiaozhi-esp32/blob/main/docs/websocket.md)
-- 框架：[tasker-base-spec](../../../docs/tasker-base-spec.md)、[aistream](../../../docs/aistream.md)、[plugin-base](../../../docs/plugin-base.md)
+- **协议**：[78/xiaozhi-esp32 WebSocket](https://github.com/78/xiaozhi-esp32/blob/main/docs/websocket.md)
+- **框架**：[tasker-base-spec](../../../docs/tasker-base-spec.md)、[aistream](../../../docs/aistream.md)、[plugin-base](../../../docs/plugin-base.md)
+- **许可证**：本 Core 采用 [MIT License](./LICENSE) 开源。
 
 ---
 
-## 鸣谢
+## 🙏 鸣谢
 
-xiaozhi-Core 基于 [XRK-AGT](https://github.com/sunflowermm/XRK-AGT) 提供的 Tasker、ASR/TTS 工厂与 AIStream 工作流能力实现，
-感谢 XRK-AGT 框架为本 Core 提供稳定的底层设施。
+xiaozhi-Core 基于 [XRK-AGT](https://github.com/sunflowermm/XRK-AGT) 提供的 Tasker、ASR/TTS 工厂与 AIStream 工作流能力实现，感谢 XRK-AGT 框架为本 Core 提供稳定的底层设施。
