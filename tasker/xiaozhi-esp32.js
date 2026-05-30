@@ -8,7 +8,6 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { spawn } from 'node:child_process';
 import { Readable } from 'node:stream';
-import fetch from 'node-fetch';
 import { ulid } from 'ulid';
 import BotUtil from '../../../src/utils/botutil.js';
 import ASRFactory from '../../../src/factory/asr/ASRFactory.js';
@@ -34,6 +33,8 @@ const playAudioLast = new Map();
 
 /** 设备 MCP 工具调用默认等待超时（ms） */
 const MCP_CALL_TIMEOUT_MS = 3500;
+/** 点歌 URL 拉取超时（ms） */
+const MUSIC_FETCH_TIMEOUT_MS = 30000;
 
 const MUSIC_FETCH_HEADERS = {
   'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
@@ -44,7 +45,12 @@ const MUSIC_FETCH_HEADERS = {
 async function fetchMusicBuffer(url) {
   if (!url || !url.startsWith('http')) return null;
   try {
-    const res = await fetch(url, { method: 'GET', redirect: 'follow', headers: MUSIC_FETCH_HEADERS });
+    const res = await fetch(url, {
+      method: 'GET',
+      redirect: 'follow',
+      headers: MUSIC_FETCH_HEADERS,
+      signal: AbortSignal.timeout(MUSIC_FETCH_TIMEOUT_MS)
+    });
     if (!res.ok) return null;
     const contentType = (res.headers.get('content-type') || '').toLowerCase();
     if (contentType.includes('text/html') || contentType.includes('application/json')) return null;
