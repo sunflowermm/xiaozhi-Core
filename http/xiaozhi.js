@@ -21,8 +21,8 @@ function buildWsUrl(req, wsPath) {
 
 /** 获取 xiaozhi-esp32 Tasker 实例 */
 function getTasker() {
-  if (!Array.isArray(global.Bot?.tasker)) return null;
-  return global.Bot.tasker.find(t => t?.id === TASKER_ID || t?.path === TASKER_ID) || null;
+  if (!Array.isArray(global.AgentRuntime?.tasker)) return null;
+  return global.AgentRuntime.tasker.find(t => t?.id === TASKER_ID || t?.path === TASKER_ID) || null;
 }
 
 // ----- 设备侧（协议兼容，勿改格式） -----
@@ -33,15 +33,15 @@ const health = (req, res) => {
 };
 
 const otaGet = async (req, res) => {
-  const cfg = await getXiaozhiConfig();
-  const wsUrl = buildWsUrl(req, cfg?.path);
+  const runtimeConfig = await getXiaozhiConfig();
+  const wsUrl = buildWsUrl(req, runtimeConfig?.path);
   res.status(200).set('Content-Type', 'text/plain; charset=utf-8')
     .send(`OTA接口运行正常，向设备发送的websocket地址是：${wsUrl}\n`);
 };
 
 const otaPost = async (req, res) => {
-  const cfg = await getXiaozhiConfig();
-  const wsUrl = buildWsUrl(req, cfg?.path);
+  const runtimeConfig = await getXiaozhiConfig();
+  const wsUrl = buildWsUrl(req, runtimeConfig?.path);
   res.status(200).set('Content-Type', 'application/json').json({
     server_time: {
       timestamp: Math.round(Date.now()),
@@ -60,7 +60,7 @@ const getConfig = async (req, res) => {
 };
 
 const setConfig = async (req, res) => {
-  const config = global.ConfigManager?.get('xiaozhi');
+  const config = global.CommonConfigRegistry?.get('xiaozhi');
   if (!config) return HttpResponse.notFound(res, 'xiaozhi 配置不存在');
   const { data } = req.body || {};
   if (!data || typeof data !== 'object') {
@@ -71,12 +71,12 @@ const setConfig = async (req, res) => {
 };
 
 const getStatus = async (req, res) => {
-  const cfg = await getXiaozhiConfig();
+  const runtimeConfig = await getXiaozhiConfig();
   const tasker = getTasker();
   const connections = tasker?.getConnections?.() ?? [];
   HttpResponse.success(res, {
-    enabled: cfg?.enabled !== false,
-    path: cfg?.path ?? DEFAULT_WS_PATH,
+    enabled: runtimeConfig?.enabled !== false,
+    path: runtimeConfig?.path ?? DEFAULT_WS_PATH,
     count: tasker?.getConnectionCount?.() ?? 0,
     connections
   });

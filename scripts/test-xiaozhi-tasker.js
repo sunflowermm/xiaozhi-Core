@@ -12,10 +12,10 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 function log(msg) { console.log('[test-xiaozhi-tasker]', msg); }
 function fail(msg) { console.error('[test-xiaozhi-tasker] FAIL:', msg); process.exitCode = 1; }
 
-global.Bot = { tasker: [], wsf: {}, uin: [], on: () => {}, em: () => {} };
+global.AgentRuntime = { tasker: [], wsf: {}, uin: [], on: () => {}, em: () => {} };
 await import(pathToFileURL(path.join(__dirname, '../tasker/xiaozhi-esp32.js')).href);
 
-const tasker = global.Bot.tasker.find((t) => t?.id === 'xiaozhi-esp32');
+const tasker = global.AgentRuntime.tasker.find((t) => t?.id === 'xiaozhi-esp32');
 if (!tasker) { fail('未找到 xiaozhi-esp32 Tasker'); process.exit(1); }
 
 log('Tasker 已加载');

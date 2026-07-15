@@ -9,10 +9,10 @@ import { fileURLToPath } from 'node:url';
 import { spawn } from 'node:child_process';
 import { Readable } from 'node:stream';
 import { ulid } from 'ulid';
-import BotUtil from '../../../src/utils/botutil.js';
+import RuntimeUtil from '../../../src/utils/runtime-util.js';
 import ASRFactory from '../../../src/factory/asr/ASRFactory.js';
 import TTSFactory from '../../../src/factory/tts/TTSFactory.js';
-import StreamLoader from '../../../src/infrastructure/aistream/loader.js';
+import AiStreamLoader from '../../../src/infrastructure/ai-workflow/loader.js';
 import { getAsrConfig, getTtsConfig, getLLMSettings } from '../../../src/utils/aistream-config.js';
 import { normalizeEmotionToDevice } from '../../../src/utils/emotion-utils.js';
 import { getXiaozhiConfig } from '../utils/config.js';
@@ -163,22 +163,22 @@ function createXiaozhiTasker() {
                     if (typeof cb === 'function') cb(pcm);
                 }
             });
-            py.stderr.on('data', (d) => BotUtil.makeLog('warn', `[Xiaozhi] ASR Opus py: ${d.toString().trim()}`, conn.deviceId));
-            py.on('error', (e) => BotUtil.makeLog('warn', `[Xiaozhi] ASR Opus 进程: ${e.message}`, conn.deviceId));
+            py.stderr.on('data', (d) => RuntimeUtil.makeLog('warn', `[Xiaozhi] ASR Opus py: ${d.toString().trim()}`, conn.deviceId));
+            py.on('error', (e) => RuntimeUtil.makeLog('warn', `[Xiaozhi] ASR Opus 进程: ${e.message}`, conn.deviceId));
             py.on('exit', (code) => {
                 conn.asrDecoderProcess = null;
                 conn.asrDecoderStdin = null;
-                if (code != null && code !== 0) BotUtil.makeLog('warn', `[Xiaozhi] ASR Opus 进程退出 code=${code}`, conn.deviceId);
+                if (code != null && code !== 0) RuntimeUtil.makeLog('warn', `[Xiaozhi] ASR Opus 进程退出 code=${code}`, conn.deviceId);
             });
         } catch (e) {
-            BotUtil.makeLog('warn', `[Xiaozhi] ASR Opus 启动失败: ${e.message}`, conn.deviceId);
+            RuntimeUtil.makeLog('warn', `[Xiaozhi] ASR Opus 启动失败: ${e.message}`, conn.deviceId);
         }
     }
 
     function createBot(deviceId) {
         if (deviceBots.has(deviceId)) return deviceBots.get(deviceId);
         const botId = `xiaozhi-${deviceId}`;
-        if (!Bot.uin?.includes(botId)) Bot.uin.push(botId);
+        if (!AgentRuntime.uin?.includes(botId)) AgentRuntime.uin.push(botId);
 
         const bot = {
             uin: botId,
@@ -214,8 +214,8 @@ function createXiaozhiTasker() {
                 sendJsonToDevice(deviceId, { type: 'listen', state: 'stop' });
             }
         };
-        Bot[botId] = bot;
-        Bot[deviceId] = bot; // ASR/TTS 通过 Bot[deviceId] 查找 deviceBot
+        AgentRuntime[botId] = bot;
+        AgentRuntime[deviceId] = bot; // ASR/TTS 通过 AgentRuntime[deviceId] 查找 deviceBot
         deviceBots.set(deviceId, bot);
         return bot;
     }
@@ -245,7 +245,7 @@ function createXiaozhiTasker() {
             conn.ttsSendPacketCount = 0;
             conn._ttsPaceStartTime = null;
             conn.deviceState = 'speaking';
-            BotUtil.makeLog('debug', `[Xiaozhi] sendJson tts start → clientIsSpeaking=true ttsSource=${conn.ttsSource} deviceState=speaking`, deviceId);
+            RuntimeUtil.makeLog('debug', `[Xiaozhi] sendJson tts start → clientIsSpeaking=true ttsSource=${conn.ttsSource} deviceState=speaking`, deviceId);
         }
         if (obj.type === 'tts' && obj.state === 'stop') {
             const now = Date.now();
@@ -258,11 +258,11 @@ function createXiaozhiTasker() {
             conn.ttsSource = null;
             // 仅当之前处于 speaking 才拉回 idle，避免覆盖设备端自动回到 listening 的状态
             if (conn.deviceState === 'speaking') conn.deviceState = 'idle';
-            BotUtil.makeLog('debug', `[Xiaozhi] sendJson tts stop → clientIsSpeaking=false deviceState=${conn.deviceState}`, deviceId);
+            RuntimeUtil.makeLog('debug', `[Xiaozhi] sendJson tts stop → clientIsSpeaking=false deviceState=${conn.deviceState}`, deviceId);
         }
         if (obj.type === 'listen' && obj.state === 'stop') {
             conn.deviceState = 'idle';
-            BotUtil.makeLog('debug', `[Xiaozhi] sendJson listen stop → deviceState=idle`, deviceId);
+            RuntimeUtil.makeLog('debug', `[Xiaozhi] sendJson listen stop → deviceState=idle`, deviceId);
         }
         const { _source, ...rest } = obj;
         const msg = { ...rest, session_id: sessionId };
@@ -270,7 +270,7 @@ function createXiaozhiTasker() {
             conn.ws.send(JSON.stringify(msg));
             return true;
         } catch (e) {
-            BotUtil.makeLog('error', `[Xiaozhi] 发送 JSON 失败: ${e.message}`, deviceId);
+            RuntimeUtil.makeLog('error', `[Xiaozhi] 发送 JSON 失败: ${e.message}`, deviceId);
             return false;
         }
     }
@@ -487,15 +487,15 @@ function createXiaozhiTasker() {
                         drainTtsQueue();
                     }
                 });
-                py.stderr.on('data', (d) => BotUtil.makeLog('warn', `[Xiaozhi] TTS Opus py: ${d.toString().trim()}`, deviceId));
-                py.on('error', (e) => BotUtil.makeLog('warn', `[Xiaozhi] TTS Opus 进程: ${e.message}`, deviceId));
+                py.stderr.on('data', (d) => RuntimeUtil.makeLog('warn', `[Xiaozhi] TTS Opus py: ${d.toString().trim()}`, deviceId));
+                py.on('error', (e) => RuntimeUtil.makeLog('warn', `[Xiaozhi] TTS Opus 进程: ${e.message}`, deviceId));
                 py.on('exit', (code, sig) => {
                     conn.opusTtsProcess = null;
                     conn.opusTtsStdin = null;
-                    if (code != null && code !== 0) BotUtil.makeLog('warn', `[Xiaozhi] TTS Opus 进程退出 code=${code}`, deviceId);
+                    if (code != null && code !== 0) RuntimeUtil.makeLog('warn', `[Xiaozhi] TTS Opus 进程退出 code=${code}`, deviceId);
                 });
             } catch (e) {
-                BotUtil.makeLog('warn', `[Xiaozhi] TTS Opus 启动失败: ${e.message}`, deviceId);
+                RuntimeUtil.makeLog('warn', `[Xiaozhi] TTS Opus 启动失败: ${e.message}`, deviceId);
             }
         }
 
@@ -509,9 +509,9 @@ function createXiaozhiTasker() {
             startTtsOpusProcess();
             if (conn.opusTtsStdin?.writable) {
                 try {
-                    conn.opusTtsStdin.write(pcm, (err) => { if (err) BotUtil.makeLog('warn', `[Xiaozhi] TTS Opus write: ${err.message}`, deviceId); });
+                    conn.opusTtsStdin.write(pcm, (err) => { if (err) RuntimeUtil.makeLog('warn', `[Xiaozhi] TTS Opus write: ${err.message}`, deviceId); });
                 } catch (e) {
-                    BotUtil.makeLog('warn', `[Xiaozhi] TTS Opus 编码: ${e.message}`, deviceId);
+                    RuntimeUtil.makeLog('warn', `[Xiaozhi] TTS Opus 编码: ${e.message}`, deviceId);
                 }
             }
         }
@@ -522,7 +522,7 @@ function createXiaozhiTasker() {
         };
         bot.flushTtsOpus = async () => {
             if (conn.ws?.readyState !== 1) return;
-            BotUtil.makeLog('info', `[Xiaozhi] TTS flush 开始`, deviceId);
+            RuntimeUtil.makeLog('info', `[Xiaozhi] TTS flush 开始`, deviceId);
             if (conn.opusTtsStdin?.writable) {
                 try {
                     conn.opusTtsStdin.end();
@@ -533,9 +533,9 @@ function createXiaozhiTasker() {
                 await new Promise(r => setTimeout(r, DRAIN_POLL_MS));
             }
             while (conn.ttsOpusQueue?.length > 0 || conn.ttsSending) await new Promise(r => setTimeout(r, DRAIN_POLL_MS));
-            BotUtil.makeLog('info', `[Xiaozhi] TTS 队列已排空 入队=${conn._ttsOpusPushedCount ?? '-'} 已发=${conn.ttsSendPacketCount || 0}包 等${TTS_STOP_BUFFER_DRAIN_MS}ms`, deviceId);
+            RuntimeUtil.makeLog('info', `[Xiaozhi] TTS 队列已排空 入队=${conn._ttsOpusPushedCount ?? '-'} 已发=${conn.ttsSendPacketCount || 0}包 等${TTS_STOP_BUFFER_DRAIN_MS}ms`, deviceId);
             await new Promise(r => setTimeout(r, TTS_STOP_BUFFER_DRAIN_MS));
-            BotUtil.makeLog('info', `[Xiaozhi] TTS flush 完成`, deviceId);
+            RuntimeUtil.makeLog('info', `[Xiaozhi] TTS flush 完成`, deviceId);
         };
 
         /** 点歌：url（mp3/mp4）转 24k PCM → Opus 流下发设备（与 TTS 同管道）。需本机已安装 ffmpeg 并加入 PATH。
@@ -554,13 +554,13 @@ function createXiaozhiTasker() {
                         const speakingReply = current.deviceState === 'speaking' && current.ttsSource === 'tts';
                         if (!speakingReply) break;
                         if (Date.now() - waitStart > MAX_WAIT_BEFORE_MUSIC) {
-                            BotUtil.makeLog('warn', '[Xiaozhi] 等待回复 TTS 结束超时，立即开始播放音乐', deviceId);
+                            RuntimeUtil.makeLog('warn', '[Xiaozhi] 等待回复 TTS 结束超时，立即开始播放音乐', deviceId);
                             break;
                         }
                         await new Promise(r => setTimeout(r, DRAIN_POLL_MS));
                     }
                 } catch (e) {
-                    BotUtil.makeLog('warn', `[Xiaozhi] 等待回复 TTS 结束异常: ${e.message}`, deviceId);
+                    RuntimeUtil.makeLog('warn', `[Xiaozhi] 等待回复 TTS 结束异常: ${e.message}`, deviceId);
                 }
                 const now = Date.now();
                 const last = playAudioLast.get(deviceId);
@@ -595,7 +595,7 @@ function createXiaozhiTasker() {
                     if (usePipe) {
                         const input = Readable.from([data.buffer]);
                         input.on('error', (e) => {
-                            if (!didError) { didError = true; BotUtil.makeLog('warn', `[Xiaozhi] 点歌输入: ${e.message}`, deviceId); }
+                            if (!didError) { didError = true; RuntimeUtil.makeLog('warn', `[Xiaozhi] 点歌输入: ${e.message}`, deviceId); }
                         });
                         input.pipe(ffmpeg.stdin, { end: true });
                     }
@@ -610,9 +610,9 @@ function createXiaozhiTasker() {
                         if (didError) return;
                         didError = true;
                         if (e.code === 'ENOENT') {
-                            BotUtil.makeLog('warn', '[Xiaozhi] 点歌需要本机安装 ffmpeg 并加入系统 PATH', deviceId);
+                            RuntimeUtil.makeLog('warn', '[Xiaozhi] 点歌需要本机安装 ffmpeg 并加入系统 PATH', deviceId);
                         } else {
-                            BotUtil.makeLog('warn', `[Xiaozhi] 点歌 ffmpeg: ${e.message}`, deviceId);
+                            RuntimeUtil.makeLog('warn', `[Xiaozhi] 点歌 ffmpeg: ${e.message}`, deviceId);
                         }
                     });
                     ffmpeg.on('close', async (code) => {
@@ -622,7 +622,7 @@ function createXiaozhiTasker() {
                         if (code !== 0 && !didError) {
                             const errText = Buffer.concat(stderrChunks).toString('utf8').trim();
                             const lastLines = errText.split(/\r?\n/).filter(Boolean).slice(-6).join(' ');
-                            BotUtil.makeLog('warn', `[Xiaozhi] 点歌 ffmpeg 退出 code=${code}${lastLines ? ` | ${lastLines}` : ''}`, deviceId);
+                            RuntimeUtil.makeLog('warn', `[Xiaozhi] 点歌 ffmpeg 退出 code=${code}${lastLines ? ` | ${lastLines}` : ''}`, deviceId);
                             // 点歌失败时，主动用 TTS 提示用户，避免只在日志里报错
                             try {
                                 const ttsConfig = getTtsConfig();
@@ -631,34 +631,34 @@ function createXiaozhiTasker() {
                                     // 防御性：确保没有遗留的编码/播放任务
                                     clearSpeakingState(deviceId, conn);
                                     resetTtsFlowState(conn);
-                                    BotUtil.makeLog('info', `[Xiaozhi] 点歌失败提示 TTS 开始 文本=${text.length}字`, deviceId);
+                                    RuntimeUtil.makeLog('info', `[Xiaozhi] 点歌失败提示 TTS 开始 文本=${text.length}字`, deviceId);
                                     sendJsonToDevice(deviceId, { type: 'tts', state: 'start', _source: 'tts' });
                                     sendJsonToDevice(deviceId, { type: 'tts', state: 'sentence_start', text });
                                     try {
                                         const xiaozhiTtsConfig = { ...ttsConfig, sampleRate: 24000, chunkMs: 60, encoding: 'pcm' };
-                                        const ttsClient = TTSFactory.createClient(deviceId, xiaozhiTtsConfig, Bot);
+                                        const ttsClient = TTSFactory.createClient(deviceId, xiaozhiTtsConfig, AgentRuntime);
                                         await ttsClient.synthesize(text, { sampleRate: 24000 });
                                         if (typeof ttsClient.waitAudioSent === 'function') await ttsClient.waitAudioSent();
                                         if (typeof conn.bot?.flushTtsOpus === 'function') await conn.bot.flushTtsOpus();
                                     } catch (e) {
-                                        BotUtil.makeLog('error', `[Xiaozhi] 点歌失败提示 TTS 失败: ${e.message}`, deviceId);
+                                        RuntimeUtil.makeLog('error', `[Xiaozhi] 点歌失败提示 TTS 失败: ${e.message}`, deviceId);
                                     }
                                     stopTts(deviceId, conn, { force: true, source: 'tts' });
                                 }
                             } catch (e) {
-                                BotUtil.makeLog('error', `[Xiaozhi] 点歌失败提示 TTS 触发异常: ${e.message}`, deviceId);
+                                RuntimeUtil.makeLog('error', `[Xiaozhi] 点歌失败提示 TTS 触发异常: ${e.message}`, deviceId);
                             }
                         }
                     });
                 } catch (e) {
-                    BotUtil.makeLog('error', `[Xiaozhi] 点歌失败: ${e.message}`, deviceId);
+                    RuntimeUtil.makeLog('error', `[Xiaozhi] 点歌失败: ${e.message}`, deviceId);
                     stopTts(deviceId, conn, { force: true, source: 'play_music' });
                 }
             })();
             return Promise.resolve();
         };
 
-        Bot.em('xiaozhi.device.connected', {
+        AgentRuntime.em('xiaozhi.device.connected', {
             self_id: bot.self_id,
             tasker: TASKER_ID,
             tasker_id: TASKER_ID,
@@ -670,16 +670,16 @@ function createXiaozhiTasker() {
             session_id: sessionId,
             audio_params: conn.audioParams
         });
-        BotUtil.makeLog('info', `[Xiaozhi] 设备已握手: ${deviceId}`, deviceId);
+        RuntimeUtil.makeLog('info', `[Xiaozhi] 设备已握手: ${deviceId}`, deviceId);
     }
 
     async function handleListen(sessionId, message, conn) {
         const { deviceId, bot } = conn;
         const state = message.state || '';
         const mode = message.mode || 'auto';
-        BotUtil.makeLog('debug', `[Xiaozhi] handleListen state=${state} mode=${mode}`, deviceId);
+        RuntimeUtil.makeLog('debug', `[Xiaozhi] handleListen state=${state} mode=${mode}`, deviceId);
 
-        Bot.em('xiaozhi.device.listen', {
+        AgentRuntime.em('xiaozhi.device.listen', {
             self_id: bot.self_id,
             tasker: TASKER_ID,
             tasker_id: TASKER_ID,
@@ -714,7 +714,7 @@ function createXiaozhiTasker() {
             const rawText = (message.text || '').trim();
             const wakeText = fixListenTextEncoding(rawText);
             if (wakeText) {
-                BotUtil.makeLog('info', `[Xiaozhi] 唤醒词检测: "${wakeText}"`, deviceId);
+                RuntimeUtil.makeLog('info', `[Xiaozhi] 唤醒词检测: "${wakeText}"`, deviceId);
             }
             resetAudioStates(conn);
             // 刚被唤醒时短暂忽略 VAD 检测，防止唤醒提示音/残留被当成语音
@@ -738,7 +738,7 @@ function createXiaozhiTasker() {
             if (asrConfig.enabled) {
                 try {
                     const config = { ...asrConfig, idleCloseMs: 0 };
-                    const client = conn.asrClient || ASRFactory.createClient(deviceId, config, Bot);
+                    const client = conn.asrClient || ASRFactory.createClient(deviceId, config, AgentRuntime);
                     if (!conn.asrClient) conn.asrClient = client;
                     await client.beginUtterance(utteranceId, {
                         sample_rate: conn.audioParams?.deviceSampleRate || 16000,
@@ -747,27 +747,27 @@ function createXiaozhiTasker() {
                         codec: 'pcm'
                     });
                 } catch (e) {
-                    BotUtil.makeLog('error', `[Xiaozhi] ASR 启动失败: ${e.message}`, deviceId);
+                    RuntimeUtil.makeLog('error', `[Xiaozhi] ASR 启动失败: ${e.message}`, deviceId);
                 }
             }
         } else if (state === 'stop' && conn.asrClient) {
-            BotUtil.makeLog('debug', `[Xiaozhi] handleListen 收到 stop 结束 ASR`, deviceId);
-            conn.asrClient.endUtterance().catch(e => BotUtil.makeLog('warn', `[Xiaozhi] ASR 结束: ${e.message}`, deviceId));
+            RuntimeUtil.makeLog('debug', `[Xiaozhi] handleListen 收到 stop 结束 ASR`, deviceId);
+            conn.asrClient.endUtterance().catch(e => RuntimeUtil.makeLog('warn', `[Xiaozhi] ASR 结束: ${e.message}`, deviceId));
         }
     }
 
     async function runLLMAndTTS(deviceId, sessionId, text, conn) {
         if (!text?.trim()) return;
         if (conn.clientAbort) {
-            BotUtil.makeLog('debug', `[Xiaozhi] runLLMAndTTS 跳过 已打断 sessionId=${sessionId}`, deviceId);
+            RuntimeUtil.makeLog('debug', `[Xiaozhi] runLLMAndTTS 跳过 已打断 sessionId=${sessionId}`, deviceId);
             return;
         }
         if (conn._runLLMAndTTSLock) {
-            BotUtil.makeLog('debug', `[Xiaozhi] runLLMAndTTS 跳过 上一轮未结束 sessionId=${sessionId}`, deviceId);
+            RuntimeUtil.makeLog('debug', `[Xiaozhi] runLLMAndTTS 跳过 上一轮未结束 sessionId=${sessionId}`, deviceId);
             return;
         }
         conn._runLLMAndTTSLock = true;
-        BotUtil.makeLog('debug', `[Xiaozhi] runLLMAndTTS 入口 sessionId=${sessionId} textLen=${text?.length ?? 0}`, deviceId);
+        RuntimeUtil.makeLog('debug', `[Xiaozhi] runLLMAndTTS 入口 sessionId=${sessionId} textLen=${text?.length ?? 0}`, deviceId);
 
         try {
         // 读取 xiaozhi 配置（由 commonconfig/xiaozhi.js 管理；首次缺失会自动创建默认文件）
@@ -778,13 +778,13 @@ function createXiaozhiTasker() {
         
         // 获取主工作流（第一个）
         const mainWorkflow = workflows[0] || 'xiaozhi';
-        let stream = StreamLoader.getStream(mainWorkflow);
+        let stream = AiStreamLoader.getStream(mainWorkflow);
         
         // 如果配置了多个工作流，合并它们（只合并 MCP 工具，不改 prompt 结构）
         if (workflows.length > 1) {
             const secondary = workflows.slice(1);
             const mergedName = `xiaozhi-${workflows.join('-')}`;
-            stream = StreamLoader.getStream(mergedName) || StreamLoader.mergeStreams({
+            stream = AiStreamLoader.getStream(mergedName) || AiStreamLoader.mergeStreams({
                 name: mergedName,
                 main: mainWorkflow,
                 secondary,
@@ -793,13 +793,13 @@ function createXiaozhiTasker() {
         }
         
         if (!stream) {
-            BotUtil.makeLog('warn', `[Xiaozhi] 工作流未加载: ${mainWorkflow}`, deviceId);
+            RuntimeUtil.makeLog('warn', `[Xiaozhi] 工作流未加载: ${mainWorkflow}`, deviceId);
             return;
         }
         
         const streamConfig = getLLMSettings({ workflow: mainWorkflow });
         if (!streamConfig?.enabled) {
-            BotUtil.makeLog('warn', '[Xiaozhi] 工作流未启用', deviceId);
+            RuntimeUtil.makeLog('warn', '[Xiaozhi] 工作流未启用', deviceId);
             return;
         }
         // 合并多工作流时传入 streams，供 LLM 工具白名单使用（如 xiaozhi + desktop 同时可用）
@@ -810,20 +810,20 @@ function createXiaozhiTasker() {
         const executeContext = { deviceId, device_id: deviceId, device_type: 'xiaozhi' };
         let aiResult;
         try {
-            // 对齐 StreamLoader.mergeStreams 的 execute 签名：(deviceId, question, apiConfig, persona)
+            // 对齐 AiStreamLoader.mergeStreams 的 execute 签名：(deviceId, question, apiConfig, persona)
             aiResult = await stream.execute(deviceId, text, { ...streamConfig, persona, context: executeContext }, persona);
         } catch (e) {
-            BotUtil.makeLog('error', `[Xiaozhi] LLM 执行失败: ${e.message}`, deviceId);
+            RuntimeUtil.makeLog('error', `[Xiaozhi] LLM 执行失败: ${e.message}`, deviceId);
             return;
         }
-        BotUtil.makeLog('debug', `[Xiaozhi] runLLMAndTTS LLM 完成 有文本=${!!aiResult?.text}`, deviceId);
+        RuntimeUtil.makeLog('debug', `[Xiaozhi] runLLMAndTTS LLM 完成 有文本=${!!aiResult?.text}`, deviceId);
         if (!aiResult?.text) return;
         if (conn.clientAbort) {
-            BotUtil.makeLog('debug', `[Xiaozhi] runLLMAndTTS 打断后跳过 TTS sessionId=${sessionId}`, deviceId);
+            RuntimeUtil.makeLog('debug', `[Xiaozhi] runLLMAndTTS 打断后跳过 TTS sessionId=${sessionId}`, deviceId);
             return;
         }
         if (conn.asrClient) {
-            BotUtil.makeLog('debug', `[Xiaozhi] runLLMAndTTS 结束 ASR utterance 准备播 TTS`, deviceId);
+            RuntimeUtil.makeLog('debug', `[Xiaozhi] runLLMAndTTS 结束 ASR utterance 准备播 TTS`, deviceId);
             conn.asrClient.endUtterance().catch(() => {});
         }
         const emotion = normalizeEmotionToDevice(aiResult.emotion);
@@ -832,27 +832,27 @@ function createXiaozhiTasker() {
         const ttsConfig = getTtsConfig();
         // 仅当点歌占用管道时跳过回复 TTS，避免截断点歌；回复 TTS 的 clientIsSpeaking 会带 ttsSource='tts'
         if (conn.clientIsSpeaking && conn.ttsSource === 'play_music') {
-            BotUtil.makeLog('info', `[Xiaozhi] 点歌播放中，跳过回复 TTS 与 flush，由点歌自行发 tts stop`, deviceId);
+            RuntimeUtil.makeLog('info', `[Xiaozhi] 点歌播放中，跳过回复 TTS 与 flush，由点歌自行发 tts stop`, deviceId);
             return;
         }
         if (ttsConfig.enabled) {
             // 防御性：确保没有遗留的编码/播放任务
             clearSpeakingState(deviceId, conn);
             resetTtsFlowState(conn);
-            BotUtil.makeLog('info', `[Xiaozhi] TTS 开始 文本=${aiResult.text?.length || 0}字 24k/60ms (Python Opus)`, deviceId);
+            RuntimeUtil.makeLog('info', `[Xiaozhi] TTS 开始 文本=${aiResult.text?.length || 0}字 24k/60ms (Python Opus)`, deviceId);
             sendJsonToDevice(deviceId, { type: 'tts', state: 'start', _source: 'tts' });
             sendJsonToDevice(deviceId, { type: 'tts', state: 'sentence_start', text: aiResult.text });
             try {
                 const xiaozhiTtsConfig = { ...ttsConfig, sampleRate: 24000, chunkMs: 60, encoding: 'pcm' };
-                const ttsClient = TTSFactory.createClient(deviceId, xiaozhiTtsConfig, Bot);
+                const ttsClient = TTSFactory.createClient(deviceId, xiaozhiTtsConfig, AgentRuntime);
                 await ttsClient.synthesize(aiResult.text, { sampleRate: 24000 });
                 if (typeof ttsClient.waitAudioSent === 'function') await ttsClient.waitAudioSent();
                 if (typeof conn.bot?.flushTtsOpus === 'function') await conn.bot.flushTtsOpus();
             } catch (e) {
-                BotUtil.makeLog('error', `[Xiaozhi] TTS 失败: ${e.message}`, deviceId);
+                RuntimeUtil.makeLog('error', `[Xiaozhi] TTS 失败: ${e.message}`, deviceId);
             }
             stopTts(deviceId, conn, { force: true, source: 'tts' });
-            BotUtil.makeLog('debug', `[Xiaozhi] runLLMAndTTS 已发 tts stop，流程结束`, deviceId);
+            RuntimeUtil.makeLog('debug', `[Xiaozhi] runLLMAndTTS 已发 tts stop，流程结束`, deviceId);
         }
         } finally {
             conn._runLLMAndTTSLock = false;
@@ -865,7 +865,7 @@ function createXiaozhiTasker() {
         resetAudioStates(conn);
         // 对齐 server：abort 先发 tts stop，再 clearSpeakStatus/clear_queues
         stopTts(deviceId, conn, { force: true });
-        Bot.em('xiaozhi.device.abort', {
+        AgentRuntime.em('xiaozhi.device.abort', {
             self_id: bot.self_id,
             tasker: TASKER_ID,
             event_id: `xiaozhi_abort_${Date.now()}`,
@@ -894,7 +894,7 @@ function createXiaozhiTasker() {
                 }
             }
         } catch (e) {
-            BotUtil.makeLog('warn', `[Xiaozhi] MCP 回包处理失败: ${e.message}`, deviceId);
+            RuntimeUtil.makeLog('warn', `[Xiaozhi] MCP 回包处理失败: ${e.message}`, deviceId);
         }
 
         // 2) 缓存常用结果：get_device_status 等一次调用即可取到数据
@@ -911,7 +911,7 @@ function createXiaozhiTasker() {
             }
         } catch (_) { /* ignore */ }
 
-        Bot.em('xiaozhi.device.mcp', {
+        AgentRuntime.em('xiaozhi.device.mcp', {
             self_id: bot.self_id,
             tasker: TASKER_ID,
             event_id: `xiaozhi_mcp_${Date.now()}`,
@@ -979,7 +979,7 @@ function createXiaozhiTasker() {
         const lenBuf = Buffer.allocUnsafe(2);
         lenBuf.writeUInt16LE(Math.min(opusBuf.length, 0xFFFF), 0);
         conn.asrDecoderStdin.write(Buffer.concat([lenBuf, opusBuf]), (err) => {
-            if (err) BotUtil.makeLog('warn', `[Xiaozhi] ASR Opus write: ${err.message}`, conn.deviceId);
+            if (err) RuntimeUtil.makeLog('warn', `[Xiaozhi] ASR Opus write: ${err.message}`, conn.deviceId);
         });
     }
 
@@ -1012,7 +1012,7 @@ function createXiaozhiTasker() {
         if (!hit?.conn?.helloDone) return;
         const conn = hit.conn;
         conn.asrSessionId = null;
-        BotUtil.makeLog('debug', `[Xiaozhi] ASR 超时事件，已清理当前会话 sessionId=${event.session_id}`, deviceId);
+        RuntimeUtil.makeLog('debug', `[Xiaozhi] ASR 超时事件，已清理当前会话 sessionId=${event.session_id}`, deviceId);
     }
 
     function cleanupConn(conn) {
@@ -1035,7 +1035,7 @@ function createXiaozhiTasker() {
         const { deviceId, bot } = conn;
         cleanupConn(conn);
         connections.delete(sessionId);
-        Bot.em('xiaozhi.device.disconnected', {
+        AgentRuntime.em('xiaozhi.device.disconnected', {
             self_id: bot?.self_id,
             tasker: TASKER_ID,
             event_id: `xiaozhi_disconnected_${Date.now()}`,
@@ -1044,7 +1044,7 @@ function createXiaozhiTasker() {
             device_id: deviceId,
             session_id: sessionId
         });
-        BotUtil.makeLog('info', `[Xiaozhi] 设备断开: ${deviceId}`, deviceId);
+        RuntimeUtil.makeLog('info', `[Xiaozhi] 设备断开: ${deviceId}`, deviceId);
     }
 
     function handleMessage(ws, req, data) {
@@ -1060,7 +1060,7 @@ function createXiaozhiTasker() {
             if (str.trim().startsWith('{')) {
                 raw = str;
             } else {
-                try { handleBinary(sessionId, data, conn); } catch (e) { BotUtil.makeLog('error', `[Xiaozhi] 二进制处理: ${e.message}`, conn.deviceId); }
+                try { handleBinary(sessionId, data, conn); } catch (e) { RuntimeUtil.makeLog('error', `[Xiaozhi] 二进制处理: ${e.message}`, conn.deviceId); }
                 return;
             }
         }
@@ -1069,7 +1069,7 @@ function createXiaozhiTasker() {
         try {
             message = typeof raw === 'string' ? JSON.parse(raw) : raw;
         } catch (e) {
-            BotUtil.makeLog('warn', `[Xiaozhi] JSON 解析失败: ${e.message}`, conn.deviceId);
+            RuntimeUtil.makeLog('warn', `[Xiaozhi] JSON 解析失败: ${e.message}`, conn.deviceId);
             return;
         }
 
@@ -1091,11 +1091,11 @@ function createXiaozhiTasker() {
                 break;
             case 'system':
                 if (message.command === 'reboot') {
-                    BotUtil.makeLog('info', '[Xiaozhi] 设备请求重启（仅记录）', conn.deviceId);
+                    RuntimeUtil.makeLog('info', '[Xiaozhi] 设备请求重启（仅记录）', conn.deviceId);
                 }
                 break;
             default:
-                BotUtil.makeLog('debug', `[Xiaozhi] 未知 type: ${type}`, conn.deviceId);
+                RuntimeUtil.makeLog('debug', `[Xiaozhi] 未知 type: ${type}`, conn.deviceId);
         }
     }
 
@@ -1124,9 +1124,9 @@ function createXiaozhiTasker() {
 
         ws.on('message', (data) => handleMessage(ws, req, data));
         ws.on('close', () => handleDisconnect(sessionId));
-        ws.on('error', (e) => BotUtil.makeLog('error', `[Xiaozhi] WS 错误: ${e.message}`, deviceId));
+        ws.on('error', (e) => RuntimeUtil.makeLog('error', `[Xiaozhi] WS 错误: ${e.message}`, deviceId));
 
-        BotUtil.makeLog('info', `[Xiaozhi] 新连接: ${deviceId} (${sessionId})`, deviceId);
+        RuntimeUtil.makeLog('info', `[Xiaozhi] 新连接: ${deviceId} (${sessionId})`, deviceId);
     }
 
     const tasker = {
@@ -1144,8 +1144,8 @@ function createXiaozhiTasker() {
 
         load() {
             const mount = (pathKey) => {
-                if (!Array.isArray(Bot.wsf[pathKey])) Bot.wsf[pathKey] = [];
-                Bot.wsf[pathKey].push({
+                if (!Array.isArray(AgentRuntime.wsf[pathKey])) AgentRuntime.wsf[pathKey] = [];
+                AgentRuntime.wsf[pathKey].push({
                     handler: (conn, req, socket, head) => handleConnection(conn, req, socket, head),
                     // xiaozhi-esp32 走设备级自定义鉴权/配对逻辑，跳过系统级 API Key 鉴权
                     skipAuth: true
@@ -1153,12 +1153,12 @@ function createXiaozhiTasker() {
             };
             mount(WS_PATH);
             if (WS_PATH_LEGACY && WS_PATH_LEGACY !== WS_PATH) mount(WS_PATH_LEGACY);
-            if (typeof Bot.on === 'function') {
-                Bot.on('device.asr_result', onAsrResult);
-                Bot.on('device.asr_timeout', onAsrTimeout);
+            if (typeof AgentRuntime.on === 'function') {
+                AgentRuntime.on('device.asr_result', onAsrResult);
+                AgentRuntime.on('device.asr_timeout', onAsrTimeout);
             }
             const paths = WS_PATH_LEGACY && WS_PATH_LEGACY !== WS_PATH ? [WS_PATH, WS_PATH_LEGACY] : [WS_PATH];
-            BotUtil.makeLog('info', `[Xiaozhi] Tasker 已加载，路径: ${paths.map(p => '/' + p).join(', ')}`, 'XiaozhiEsp32');
+            RuntimeUtil.makeLog('info', `[Xiaozhi] Tasker 已加载，路径: ${paths.map(p => '/' + p).join(', ')}`, 'XiaozhiEsp32');
         }
     };
 
@@ -1166,4 +1166,4 @@ function createXiaozhiTasker() {
 }
 
 const taskerInstance = createXiaozhiTasker();
-Bot.tasker.push(taskerInstance);
+AgentRuntime.tasker.push(taskerInstance);

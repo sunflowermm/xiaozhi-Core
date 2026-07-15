@@ -23,7 +23,7 @@ export default class XiaozhiEvent extends EventListenerBase {
 
   async init() {
     if (this._listenersInitialized) return;
-    const bot = this.bot || Bot;
+    const bot = this.bot || AgentRuntime;
     for (const type of DEVICE_EVENTS) {
       bot.on(`xiaozhi.${type}`, (e) => this.handleEvent(e));
     }

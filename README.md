@@ -70,7 +70,7 @@ flowchart LR
     WS[WebSocket /xiaozhi-esp32]
     Tasker[tasker/xiaozhi-esp32.js]
     ASR[ASRFactory]
-    LLM[StreamLoader 工作流]
+    LLM[AiStreamLoader 工作流]
     TTS[TTSFactory]
     WS --> Tasker
     Tasker --> ASR
@@ -120,7 +120,7 @@ sequenceDiagram
 | [tasker/xiaozhi-esp32.js](tasker/xiaozhi-esp32.js) | WebSocket Tasker，ASR/TTS/LLM 串联，暴露 `getConnectionCount()` / `getConnections()` |
 | [stream/xiaozhi.js](stream/xiaozhi.js) | 工作流（音量、点歌等），见 [aistream](../../../docs/aistream.md) |
 | [http/xiaozhi.js](http/xiaozhi.js) | HTTP：`/api/xiaozhi/config`、`/api/xiaozhi/status`，OTA `/xiaozhi/ota` |
-| [events/xiaozhi.js](events/xiaozhi.js) | 事件 `xiaozhi.device.*` → `PluginsLoader.deal` |
+| [events/xiaozhi.js](events/xiaozhi.js) | 事件 `xiaozhi.device.*` → `PluginLoader.deal` |
 | [commonconfig/xiaozhi.js](commonconfig/xiaozhi.js) | 配置 Schema；配置文件为 **Core 根目录** `xiaozhi.yaml`（即 `core/xiaozhi-Core/xiaozhi.yaml`），首次读取若不存在会自动创建默认 |
 | [scripts/pcm_to_opus_stream.py](scripts/pcm_to_opus_stream.py) | TTS：PCM → Opus 流 |
 | [scripts/opus_to_pcm_stream.py](scripts/opus_to_pcm_stream.py) | ASR：Opus → PCM 流 |
@@ -146,4 +146,4 @@ sequenceDiagram
 
 ## 🙏 鸣谢
 
-xiaozhi-Core 基于 [XRK-AGT](https://github.com/sunflowermm/XRK-AGT) 提供的 Tasker、ASR/TTS 工厂与 AIStream 工作流能力实现，感谢 XRK-AGT 框架为本 Core 提供稳定的底层设施。
+xiaozhi-Core 基于 [XRK-AGT](https://github.com/sunflowermm/XRK-AGT) 提供的 Tasker、ASR/TTS 工厂与 AiWorkflow 工作流能力实现，感谢 XRK-AGT 框架为本 Core 提供稳定的底层设施。

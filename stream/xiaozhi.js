@@ -1,5 +1,5 @@
-import AIStream from '../../../src/infrastructure/aistream/aistream.js';
-import BotUtil from '../../../src/utils/botutil.js';
+import AiWorkflow from '../../../src/infrastructure/ai-workflow/ai-workflow.js';
+import RuntimeUtil from '../../../src/utils/runtime-util.js';
 import { SUPPORTED_EMOTIONS, parseEmotion } from '../../../src/utils/emotion-utils.js';
 import { searchFirstSong } from '../utils/music.js';
 
@@ -7,7 +7,7 @@ import { searchFirstSong } from '../utils/music.js';
  * xiaozhi 自带工作流
  * 提供设备控制 MCP 工具：音量调节、点歌（163 搜索首条→mp3 转 opus 流下发设备）
  */
-export default class XiaozhiStream extends AIStream {
+export default class XiaozhiStream extends AiWorkflow {
   constructor() {
     super({
       name: 'xiaozhi',
@@ -72,7 +72,7 @@ export default class XiaozhiStream extends AIStream {
           content: item.content
         }));
     } catch (e) {
-      BotUtil.makeLog('warn', `[Xiaozhi] 读取对话历史失败: ${e.message}`, 'XiaozhiStream');
+      RuntimeUtil.makeLog('warn', `[Xiaozhi] 读取对话历史失败: ${e.message}`, 'XiaozhiStream');
       return [];
     }
   }
@@ -120,7 +120,7 @@ export default class XiaozhiStream extends AIStream {
 
       await client.set(key, JSON.stringify(history), { EX: 60 * 60 });
     } catch (e) {
-      BotUtil.makeLog('warn', `[Xiaozhi] 写入对话历史失败: ${e.message}`, 'XiaozhiStream');
+      RuntimeUtil.makeLog('warn', `[Xiaozhi] 写入对话历史失败: ${e.message}`, 'XiaozhiStream');
     }
   }
 
@@ -156,7 +156,7 @@ export default class XiaozhiStream extends AIStream {
         if (!deviceId) {
           return this.errorResponse('DEVICE_NOT_FOUND', '未找到设备ID');
         }
-        const bot = global.Bot && (global.Bot[deviceId] || global.Bot[`xiaozhi-${deviceId}`]);
+        const bot = global.AgentRuntime && (global.AgentRuntime[deviceId] || global.AgentRuntime[`xiaozhi-${deviceId}`]);
         if (!bot || typeof bot.sendCommand !== 'function') {
           return this.errorResponse('DEVICE_NOT_FOUND', `设备 ${deviceId} 未找到`);
         }
@@ -186,7 +186,7 @@ export default class XiaozhiStream extends AIStream {
         if (!deviceId) {
           return this.errorResponse('DEVICE_NOT_FOUND', '未找到设备ID');
         }
-        const bot = global.Bot && (global.Bot[deviceId] || global.Bot[`xiaozhi-${deviceId}`]);
+        const bot = global.AgentRuntime && (global.AgentRuntime[deviceId] || global.AgentRuntime[`xiaozhi-${deviceId}`]);
         if (!bot || typeof bot.callMcpTool !== 'function') {
           return this.errorResponse('DEVICE_NOT_FOUND', `设备 ${deviceId} 未连接或不支持 MCP 工具`);
         }
@@ -270,7 +270,7 @@ export default class XiaozhiStream extends AIStream {
         if (!deviceId) {
           return this.errorResponse('DEVICE_NOT_FOUND', '未找到设备ID');
         }
-        const bot = global.Bot && (global.Bot[deviceId] || global.Bot[`xiaozhi-${deviceId}`]);
+        const bot = global.AgentRuntime && (global.AgentRuntime[deviceId] || global.AgentRuntime[`xiaozhi-${deviceId}`]);
         if (!bot || typeof bot.emotion !== 'function') {
           return this.errorResponse('DEVICE_NOT_FOUND', `设备 ${deviceId} 未连接或不支持表情`);
         }
@@ -311,7 +311,7 @@ export default class XiaozhiStream extends AIStream {
         if (!deviceId) {
           return this.errorResponse('DEVICE_NOT_FOUND', '未找到设备ID');
         }
-        const bot = global.Bot && (global.Bot[deviceId] || global.Bot[`xiaozhi-${deviceId}`]);
+        const bot = global.AgentRuntime && (global.AgentRuntime[deviceId] || global.AgentRuntime[`xiaozhi-${deviceId}`]);
         if (!bot || typeof bot.callMcpTool !== 'function') {
           return this.errorResponse('DEVICE_NOT_FOUND', `设备 ${deviceId} 未连接或不支持屏幕亮度控制`);
         }
@@ -350,7 +350,7 @@ export default class XiaozhiStream extends AIStream {
         if (!deviceId) {
           return this.errorResponse('DEVICE_NOT_FOUND', '未找到设备ID');
         }
-        const bot = global.Bot && (global.Bot[deviceId] || global.Bot[`xiaozhi-${deviceId}`]);
+        const bot = global.AgentRuntime && (global.AgentRuntime[deviceId] || global.AgentRuntime[`xiaozhi-${deviceId}`]);
         if (!bot || typeof bot.callMcpTool !== 'function') {
           return this.errorResponse('DEVICE_NOT_FOUND', `设备 ${deviceId} 未连接或不支持主题切换`);
         }
@@ -380,7 +380,7 @@ export default class XiaozhiStream extends AIStream {
         if (!deviceId) {
           return this.errorResponse('DEVICE_NOT_FOUND', '未找到设备ID');
         }
-        const bot = global.Bot && (global.Bot[deviceId] || global.Bot[`xiaozhi-${deviceId}`]);
+        const bot = global.AgentRuntime && (global.AgentRuntime[deviceId] || global.AgentRuntime[`xiaozhi-${deviceId}`]);
         if (!bot || typeof bot.setIdle !== 'function') {
           return this.errorResponse('DEVICE_NOT_FOUND', `设备 ${deviceId} 未连接或不支持待命控制`);
         }
@@ -410,7 +410,7 @@ export default class XiaozhiStream extends AIStream {
         if (!deviceId) {
           return this.errorResponse('DEVICE_NOT_FOUND', '未找到设备ID');
         }
-        const bot = global.Bot && (global.Bot[deviceId] || global.Bot[`xiaozhi-${deviceId}`]);
+        const bot = global.AgentRuntime && (global.AgentRuntime[deviceId] || global.AgentRuntime[`xiaozhi-${deviceId}`]);
         if (!bot || typeof bot.callMcpTool !== 'function') {
           return this.errorResponse('DEVICE_NOT_FOUND', `设备 ${deviceId} 未连接或不支持 MCP 工具`);
         }
@@ -439,7 +439,7 @@ export default class XiaozhiStream extends AIStream {
         if (!deviceId) {
           return this.errorResponse('DEVICE_NOT_FOUND', '未找到设备ID');
         }
-        const bot = global.Bot && (global.Bot[deviceId] || global.Bot[`xiaozhi-${deviceId}`]);
+        const bot = global.AgentRuntime && (global.AgentRuntime[deviceId] || global.AgentRuntime[`xiaozhi-${deviceId}`]);
         if (!bot || typeof bot.callMcpTool !== 'function') {
           return this.errorResponse('DEVICE_NOT_FOUND', `设备 ${deviceId} 未连接或不支持重启`);
         }
@@ -477,7 +477,7 @@ export default class XiaozhiStream extends AIStream {
         if (!deviceId) {
           return this.errorResponse('DEVICE_NOT_FOUND', '未找到设备ID');
         }
-        const bot = global.Bot && (global.Bot[deviceId] || global.Bot[`xiaozhi-${deviceId}`]);
+        const bot = global.AgentRuntime && (global.AgentRuntime[deviceId] || global.AgentRuntime[`xiaozhi-${deviceId}`]);
         if (!bot || typeof bot.callMcpTool !== 'function') {
           return this.errorResponse('DEVICE_NOT_FOUND', `设备 ${deviceId} 未连接或不支持固件升级`);
         }
@@ -527,7 +527,7 @@ export default class XiaozhiStream extends AIStream {
         if (!song?.url) {
           return this.errorResponse('NOT_FOUND', `未找到歌曲：${songName}`);
         }
-        const bot = global.Bot && (global.Bot[deviceId] || global.Bot[`xiaozhi-${deviceId}`]);
+        const bot = global.AgentRuntime && (global.AgentRuntime[deviceId] || global.AgentRuntime[`xiaozhi-${deviceId}`]);
         if (!bot || typeof bot.playAudioUrl !== 'function') {
           return this.errorResponse('DEVICE_NOT_FOUND', `设备 ${deviceId} 未连接或不支持点歌`);
         }
@@ -569,7 +569,7 @@ export default class XiaozhiStream extends AIStream {
         if (!deviceId) {
           return this.errorResponse('DEVICE_NOT_FOUND', '未找到设备ID');
         }
-        const bot = global.Bot && (global.Bot[deviceId] || global.Bot[`xiaozhi-${deviceId}`]);
+        const bot = global.AgentRuntime && (global.AgentRuntime[deviceId] || global.AgentRuntime[`xiaozhi-${deviceId}`]);
         if (!bot || typeof bot.callMcpTool !== 'function') {
           return this.errorResponse('DEVICE_NOT_FOUND', `设备 ${deviceId} 未连接或不支持资源更新`);
         }
@@ -608,7 +608,7 @@ export default class XiaozhiStream extends AIStream {
         if (!deviceId) {
           return this.errorResponse('DEVICE_NOT_FOUND', '未找到设备ID');
         }
-        const bot = global.Bot && (global.Bot[deviceId] || global.Bot[`xiaozhi-${deviceId}`]);
+        const bot = global.AgentRuntime && (global.AgentRuntime[deviceId] || global.AgentRuntime[`xiaozhi-${deviceId}`]);
         if (!bot || typeof bot.callMcpTool !== 'function') {
           return this.errorResponse('DEVICE_NOT_FOUND', `设备 ${deviceId} 未连接或不支持摄像头`);
         }
@@ -637,7 +637,7 @@ export default class XiaozhiStream extends AIStream {
         if (!deviceId) {
           return this.errorResponse('DEVICE_NOT_FOUND', '未找到设备ID');
         }
-        const bot = global.Bot && (global.Bot[deviceId] || global.Bot[`xiaozhi-${deviceId}`]);
+        const bot = global.AgentRuntime && (global.AgentRuntime[deviceId] || global.AgentRuntime[`xiaozhi-${deviceId}`]);
         if (!bot || typeof bot.callMcpTool !== 'function') {
           return this.errorResponse('DEVICE_NOT_FOUND', `设备 ${deviceId} 未连接或不支持屏幕信息查询`);
         }
@@ -682,8 +682,8 @@ export default class XiaozhiStream extends AIStream {
         if (!deviceId) {
           return this.errorResponse('DEVICE_NOT_FOUND', '未找到设备ID');
         }
-        const Bot = global.Bot;
-        const bot = Bot && (Bot[deviceId] || Bot[`xiaozhi-${deviceId}`]);
+        const AgentRuntime = global.AgentRuntime;
+        const bot = AgentRuntime && (AgentRuntime[deviceId] || AgentRuntime[`xiaozhi-${deviceId}`]);
         if (!bot || typeof bot.callMcpTool !== 'function') {
           return this.errorResponse('DEVICE_NOT_FOUND', `设备 ${deviceId} 未连接或不支持截图`);
         }
@@ -723,8 +723,8 @@ export default class XiaozhiStream extends AIStream {
         if (!deviceId) {
           return this.errorResponse('DEVICE_NOT_FOUND', '未找到设备ID');
         }
-        const Bot = global.Bot;
-        const bot = Bot && (Bot[deviceId] || Bot[`xiaozhi-${deviceId}`]);
+        const AgentRuntime = global.AgentRuntime;
+        const bot = AgentRuntime && (AgentRuntime[deviceId] || AgentRuntime[`xiaozhi-${deviceId}`]);
         if (!bot || typeof bot.callMcpTool !== 'function') {
           return this.errorResponse('DEVICE_NOT_FOUND', `设备 ${deviceId} 未连接或不支持图片预览`);
         }
@@ -794,7 +794,7 @@ ${persona}
         this._currentDeviceId = undefined;
       }
     } catch (err) {
-      BotUtil.makeLog('error', `小智工作流失败: ${err.message}`, 'XiaozhiStream');
+      RuntimeUtil.makeLog('error', `小智工作流失败: ${err.message}`, 'XiaozhiStream');
       return null;
     }
   }
