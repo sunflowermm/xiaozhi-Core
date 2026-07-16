@@ -12,8 +12,8 @@ import { ulid } from 'ulid';
 import RuntimeUtil from '../../../src/utils/runtime-util.js';
 import ASRFactory from '../../../src/factory/asr/ASRFactory.js';
 import TTSFactory from '../../../src/factory/tts/TTSFactory.js';
-import AiStreamLoader from '../../../src/infrastructure/ai-workflow/loader.js';
-import { getAsrConfig, getTtsConfig, getLLMSettings } from '../../../src/utils/aistream-config.js';
+import AiWorkflowLoader from '../../../src/infrastructure/ai-workflow/loader.js';
+import { getAsrConfig, getTtsConfig, getLLMSettings } from '../../../src/utils/ai-workflow-config.js';
 import { normalizeEmotionToDevice } from '../../../src/utils/emotion-utils.js';
 import { getXiaozhiConfig } from '../utils/config.js';
 
@@ -778,13 +778,13 @@ function createXiaozhiTasker() {
         
         // 获取主工作流（第一个）
         const mainWorkflow = workflows[0] || 'xiaozhi';
-        let stream = AiStreamLoader.getStream(mainWorkflow);
+        let stream = AiWorkflowLoader.getWorkflow(mainWorkflow);
         
         // 如果配置了多个工作流，合并它们（只合并 MCP 工具，不改 prompt 结构）
         if (workflows.length > 1) {
             const secondary = workflows.slice(1);
             const mergedName = `xiaozhi-${workflows.join('-')}`;
-            stream = AiStreamLoader.getStream(mergedName) || AiStreamLoader.mergeStreams({
+            stream = AiWorkflowLoader.getWorkflow(mergedName) || AiWorkflowLoader.mergeWorkflows({
                 name: mergedName,
                 main: mainWorkflow,
                 secondary,
@@ -810,7 +810,7 @@ function createXiaozhiTasker() {
         const executeContext = { deviceId, device_id: deviceId, device_type: 'xiaozhi' };
         let aiResult;
         try {
-            // 对齐 AiStreamLoader.mergeStreams 的 execute 签名：(deviceId, question, apiConfig, persona)
+            // 对齐 AiWorkflowLoader.mergeWorkflows 的 execute 签名：(deviceId, question, apiConfig, persona)
             aiResult = await stream.execute(deviceId, text, { ...streamConfig, persona, context: executeContext }, persona);
         } catch (e) {
             RuntimeUtil.makeLog('error', `[Xiaozhi] LLM 执行失败: ${e.message}`, deviceId);

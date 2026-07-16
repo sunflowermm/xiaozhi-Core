@@ -3,7 +3,7 @@
  * 订阅 xiaozhi.device.* 事件，标准化 device_id / self_id 后交给插件系统
  */
 
-import EventListenerBase from '../../../src/infrastructure/listener/base.js';
+import ListenerBase from '../../../src/infrastructure/listener/base.js';
 
 const DEVICE_EVENTS = [
   'device.connected',
@@ -14,7 +14,7 @@ const DEVICE_EVENTS = [
   'device.disconnected',
 ];
 
-export default class XiaozhiEvent extends EventListenerBase {
+export default class XiaozhiEvent extends ListenerBase {
   _listenersInitialized = false;
 
   constructor() {

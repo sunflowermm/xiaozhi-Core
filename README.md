@@ -50,7 +50,7 @@
 | 维度 | AGT + xiaozhi-Core | 官方 xiaozhi-esp32-server |
 |------|--------------------|---------------------------|
 | **统一入口** | 与 `/device` 等同一进程、同一端口，一个配置管全部 | 需单独部署 Python/Java 服务 |
-| **ASR/TTS/LLM 复用** | 共用 ASRFactory/TTSFactory、工作流（aistream），配置一处生效 | 自维护一套 ASR/TTS/LLM 集成 |
+| **ASR/TTS/LLM 复用** | 共用 ASRFactory/TTSFactory、工作流（ai-workflow），配置一处生效 | 自维护一套 ASR/TTS/LLM 集成 |
 | **零延迟链路** | 语音→Opus 解码→PCM 即送 ASR；is_final 即触发 LLM→TTS，无多余缓冲与轮询延迟 | 依赖官方实现与部署环境 |
 | **扩展性** | 事件 `xiaozhi.device.*` 入插件体系，可接更多设备/业务 | 需改官方代码或另写网关 |
 | **运维** | 单进程、Node 为主，Python 仅 Opus 子进程，易监控与扩缩容 | 多语言、多进程部署复杂 |
@@ -70,7 +70,7 @@ flowchart LR
     WS[WebSocket /xiaozhi-esp32]
     Tasker[tasker/xiaozhi-esp32.js]
     ASR[ASRFactory]
-    LLM[AiStreamLoader 工作流]
+    LLM[AiWorkflowLoader 工作流]
     TTS[TTSFactory]
     WS --> Tasker
     Tasker --> ASR
@@ -118,7 +118,7 @@ sequenceDiagram
 | 目录/文件 | 说明 |
 |-----------|------|
 | [tasker/xiaozhi-esp32.js](tasker/xiaozhi-esp32.js) | WebSocket Tasker，ASR/TTS/LLM 串联，暴露 `getConnectionCount()` / `getConnections()` |
-| [stream/xiaozhi.js](stream/xiaozhi.js) | 工作流（音量、点歌等），见 [aistream](../../../docs/aistream.md) |
+| [stream/xiaozhi.js](stream/xiaozhi.js) | 工作流（音量、点歌等），见 [ai-workflow](../../../docs/ai-workflow.md) |
 | [http/xiaozhi.js](http/xiaozhi.js) | HTTP：`/api/xiaozhi/config`、`/api/xiaozhi/status`，OTA `/xiaozhi/ota` |
 | [events/xiaozhi.js](events/xiaozhi.js) | 事件 `xiaozhi.device.*` → `PluginLoader.deal` |
 | [commonconfig/xiaozhi.js](commonconfig/xiaozhi.js) | 配置 Schema；配置文件为 **Core 根目录** `xiaozhi.yaml`（即 `core/xiaozhi-Core/xiaozhi.yaml`），首次读取若不存在会自动创建默认 |
@@ -139,7 +139,7 @@ sequenceDiagram
 ## 📄 文档与许可证
 
 - **协议**：[78/xiaozhi-esp32 WebSocket](https://github.com/78/xiaozhi-esp32/blob/main/docs/websocket.md)
-- **框架**：[tasker-base-spec](../../../docs/tasker-base-spec.md)、[aistream](../../../docs/aistream.md)、[plugin-base](../../../docs/plugin-base.md)
+- **框架**：[tasker-base-spec](../../../docs/tasker-base-spec.md)、[ai-workflow](../../../docs/ai-workflow.md)、[plugin-base](../../../docs/plugin-base.md)
 - **许可证**：本 Core 采用 [MIT License](./LICENSE) 开源。
 
 ---
