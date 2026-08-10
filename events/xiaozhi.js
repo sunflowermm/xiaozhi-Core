@@ -1,6 +1,6 @@
 /**
- * xiaozhi-esp32 事件监听器
- * 订阅 xiaozhi.device.* 事件，标准化 device_id / self_id 后交给插件系统
+ * xiaozhi-esp32 事件监坬器
+ * 订阅 xiaozhi.device.* 事件，标准化 device_id / self_id 坎交给杒件系统
  */
 
 import ListenerBase from '../../../src/infrastructure/listener/base.js';
@@ -34,7 +34,7 @@ export default class XiaozhiEvent extends ListenerBase {
     if (!e || e.tasker !== 'xiaozhi-esp32') return;
     this.ensureEventId(e);
     if (!this.markProcessed(e)) return;
-    this.markAdapter(e, { isXiaozhi: true });
+    this.markTasker(e, { isXiaozhi: true });
     e.device_id = e.device_id ?? (e.self_id ? String(e.self_id).replace(/^xiaozhi-/, '') : undefined);
     await this.plugins.deal(e);
   }
